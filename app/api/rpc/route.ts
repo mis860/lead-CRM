@@ -35,6 +35,9 @@ const DISPATCHER: Record<string, Handler> = {
   updateAssignedUser: leads.handleUpdateAssignedUser,
   updateLeadStatus: leads.handleUpdateLeadStatus,
   exportLeadsCsv: leads.handleExportLeadsCsv,
+  importLeads: leads.handleImportLeads,
+  exportFollowUpsCsv: leads.handleExportFollowUpsCsv,
+  importFollowUps: leads.handleImportFollowUps,
   // dashboard
   getDashboardData: dashboard.handleGetDashboardData,
   // quotation
