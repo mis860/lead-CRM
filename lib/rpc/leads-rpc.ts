@@ -376,6 +376,7 @@ export async function handleImportLeads(req: NextRequest, args: any[]) {
         : visibleOwnerNames(s).some((n) => n.toLowerCase() === assigned.toLowerCase());
       if (!allowed) { skipped++; errors.push('Row ' + (i + 2) + ': You cannot import a lead assigned to ' + (assigned || 'blank') + '.'); continue; }
     }
+    const { data: existing } = await sb.from('leads').select('id,row_key,source_key').eq('lead_id', leadId).maybeSingle();
     const patch: any = {
       lead_id: leadId, row_key: existing?.row_key || (String(r.sourceKey || 'IMPORT').trim().toUpperCase() + '-' + leadId),
       source_key: existing?.source_key || String(r.sourceKey || 'IMPORT').trim().toUpperCase(),
@@ -386,7 +387,6 @@ export async function handleImportLeads(req: NextRequest, args: any[]) {
       lead_source: String(r.leadSource || '').trim(), assigned_name: assigned,
       base_status: safeStatus(r.leadStatus), updated_at: new Date().toISOString(),
     };
-    const { data: existing } = await sb.from('leads').select('id,row_key,source_key').eq('lead_id', leadId).maybeSingle();
     const result = existing
       ? await sb.from('leads').update(patch).eq('id', existing.id)
       : await sb.from('leads').insert(patch);
