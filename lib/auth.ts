@@ -29,20 +29,27 @@ export async function requireSession(req: NextRequest): Promise<Session | null> 
   if (!token) return null;
   const tokenHash = hashToken(token);
   const sb = supabaseAdmin();
+  // Do not embed profiles here: the production sessions table has no FK
+  // constraint to profiles, so PostgREST cannot resolve a nested relationship.
   const { data, error } = await sb
     .from('sessions')
-    .select('id, expires_at, absolute_expires_at, active, user_id, profiles:profiles(id, email, name, role)')
+    .select('id, expires_at, absolute_expires_at, active, user_id')
     .eq('token_hash', tokenHash)
     .eq('active', true)
     .maybeSingle();
-  if (error || !data || !data.profiles) return null;
+  if (error || !data) return null;
   const now = Date.now();
   if (new Date(data.expires_at).getTime() <= now) return null;
   if (new Date(data.absolute_expires_at).getTime() <= now) {
     await sb.from('sessions').update({ active: false }).eq('id', data.id);
     return null;
   }
-  const profile = Array.isArray(data.profiles) ? data.profiles[0] : data.profiles;
+  const { data: profile, error: profileError } = await sb
+    .from('profiles')
+    .select('id, email, name, role')
+    .eq('id', data.user_id)
+    .maybeSingle();
+  if (profileError || !profile) return null;
 
   // Sliding renewal — same rule as Code.gs _updateSessionActivity.
   const remainingMs = new Date(data.expires_at).getTime() - now;
