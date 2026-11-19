@@ -352,3 +352,104 @@ export async function handleExportLeadsCsv(req: NextRequest, args: any[]) {
   await audit({ actorEmail: s.email, action: 'export_leads_csv' });
   return { success: true, csv: toCsv(rows) };
 }
+
+
+/** CSV import: bounded batches, role-scoped writes, and explicit upsert by Lead ID. */
+export async function handleImportLeads(req: NextRequest, args: any[]) {
+  const s = await requireSession(req);
+  if (!s) return AUTH_EXPIRED;
+  const rows = Array.isArray(args[0]) ? args[0] : [];
+  if (!rows.length || rows.length > 500) return { success: false, code: 'VALIDATION_ERROR', message: 'Upload between 1 and 500 lead rows per file.' };
+  const sb = supabaseAdmin();
+  const privileged = ['admin', 'manager'].includes((s.role || '').toLowerCase()) ||
+    [SPECIAL_EMAILS.director, SPECIAL_EMAILS.purchase].includes(s.email.toLowerCase());
+  let imported = 0, updated = 0, skipped = 0;
+  const errors: string[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] || {};
+    const leadId = String(r.leadId || '').trim();
+    if (!leadId) { skipped++; errors.push('Row ' + (i + 2) + ': Lead ID is required.'); continue; }
+    const assigned = String(r.assignedName || '').trim();
+    if (!privileged) {
+      const allowed = s.email.toLowerCase() === SPECIAL_EMAILS.corporatesales
+        ? assigned.toLowerCase() === 'indu hada'
+        : visibleOwnerNames(s).some((n) => n.toLowerCase() === assigned.toLowerCase());
+      if (!allowed) { skipped++; errors.push('Row ' + (i + 2) + ': You cannot import a lead assigned to ' + (assigned || 'blank') + '.'); continue; }
+    }
+    const patch: any = {
+      lead_id: leadId, row_key: String(r.sourceKey || 'IMPORT').trim().toUpperCase() + '-' + leadId,
+      source_key: String(r.sourceKey || 'IMPORT').trim().toUpperCase(),
+      lead_date: r.date || null, customer_name: String(r.customerName || '').trim(),
+      contact: String(r.contact || '').trim(), city: String(r.city || '').trim(),
+      client_requirement: String(r.clientRequirement || '').trim(),
+      detail_requirements: String(r.detailRequirements || '').trim(),
+      lead_source: String(r.leadSource || '').trim(), assigned_name: assigned,
+      base_status: safeStatus(r.leadStatus), updated_at: new Date().toISOString(),
+    };
+    const { data: existing } = await sb.from('leads').select('id').eq('lead_id', leadId).maybeSingle();
+    const result = existing
+      ? await sb.from('leads').update(patch).eq('id', existing.id)
+      : await sb.from('leads').insert(patch);
+    if (result.error) { skipped++; errors.push('Row ' + (i + 2) + ': ' + result.error.message); continue; }
+    if (existing) updated++; else imported++;
+  }
+  await audit({ actorEmail: s.email, action: 'import_leads', entity: 'leads', detail: { imported, updated, skipped } });
+  return { success: true, imported, updated, skipped, errors: errors.slice(0, 30), message: 'Lead import completed.' };
+}
+
+export async function handleExportFollowUpsCsv(req: NextRequest, args: any[]) {
+  const s = await requireSession(req);
+  if (!s) return AUTH_EXPIRED;
+  const sb = supabaseAdmin();
+  const { data: fu, error } = await fetchAll(() => sb.from('follow_ups')
+    .select('lead_id,follow_date,follow_time,remark,lead_status,next_follow_date,next_follow_time,created_at')
+    .order('follow_date', { ascending: false }));
+  if (error) return { success: false, code: 'SERVER_ERROR', message: 'Failed to export follow-ups.' };
+  const scoped = scopeOr(s);
+  const { data: leads } = await fetchAll(() => {
+    let q = sb.from('lead_current').select('lead_id,customer_name,contact,assigned_name');
+    if (scoped) q = q.or(scoped);
+    return q;
+  });
+  const allowed = new Map((leads || []).map((l: any) => [String(l.lead_id), l]));
+  const { toCsv } = await import('../csv');
+  const headers = ['Lead ID','Customer Name','Contact','Assigned Name','Follow Date','Follow Time','Remark','Lead Status','Next Follow Date','Next Follow Time','Created At'];
+  const rows = [headers].concat((fu || []).filter((r: any) => allowed.has(String(r.lead_id))).map((r: any) => {
+    const l: any = allowed.get(String(r.lead_id));
+    return [r.lead_id,l.customer_name,l.contact,l.assigned_name,r.follow_date,r.follow_time,r.remark,r.lead_status,r.next_follow_date,r.next_follow_time,r.created_at];
+  }));
+  await audit({ actorEmail: s.email, action: 'export_followups_csv' });
+  return { success: true, csv: toCsv(rows) };
+}
+
+export async function handleImportFollowUps(req: NextRequest, args: any[]) {
+  const s = await requireSession(req);
+  if (!s) return AUTH_EXPIRED;
+  const rows = Array.isArray(args[0]) ? args[0] : [];
+  if (!rows.length || rows.length > 500) return { success: false, code: 'VALIDATION_ERROR', message: 'Upload between 1 and 500 follow-up rows per file.' };
+  const sb = supabaseAdmin();
+  const scoped = scopeOr(s);
+  const { data: leads } = await fetchAll(() => {
+    let q = sb.from('lead_current').select('lead_id,assigned_name');
+    if (scoped) q = q.or(scoped);
+    return q;
+  });
+  const allowed = new Map((leads || []).map((l: any) => [String(l.lead_id), l]));
+  const inserts: any[] = [], errors: string[] = [];
+  rows.forEach((r: any, i: number) => {
+    const leadId = String(r.leadId || '').trim();
+    if (!leadId || !r.followDate) { errors.push('Row ' + (i + 2) + ': Lead ID and Follow Date are required.'); return; }
+    if (!allowed.has(leadId)) { errors.push('Row ' + (i + 2) + ': Lead not found or not accessible: ' + leadId); return; }
+    inserts.push({ lead_id: leadId, follow_date: r.followDate, follow_time: r.followTime || '',
+      remark: r.remark || '', lead_status: safeStatus(r.leadStatus),
+      next_follow_date: r.nextFollowDate || null, next_follow_time: r.nextFollowTime || '', created_by: s.email });
+  });
+  let imported = 0;
+  for (let i = 0; i < inserts.length; i += 100) {
+    const { error } = await sb.from('follow_ups').insert(inserts.slice(i, i + 100));
+    if (error) errors.push('Database batch error: ' + error.message);
+    else imported += inserts.slice(i, i + 100).length;
+  }
+  await audit({ actorEmail: s.email, action: 'import_followups', entity: 'follow_ups', detail: { imported, errors: errors.length } });
+  return { success: true, imported, skipped: rows.length - imported, errors: errors.slice(0, 30), message: 'Follow-up import completed.' };
+}
