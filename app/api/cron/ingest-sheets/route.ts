@@ -1,0 +1,516 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { isCronAuthorized } from '@/lib/cron-auth';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
+
+/** Sheets → DB ingest: reads rows newer than sheet_sync_state.last_row per source
+ *  tab, normalizes, and upserts into `leads` by (source_key, lead_id). Never
+ *  overwrites DB-side edits (assignment/status) — sheet is source of truth only
+ *  for NEW rows. Source-tab column maps lifted from Code.gs LEAD_SOURCES. */
+const SOURCES = [
+  { key: 'INDIAMART', sheetName: 'Leads', endCol: 'Q',
+    map: { leadId: 0, date: 1, customerName: 2, contact: 4, email: 13, city: 10, clientRequirement: 7, detailRequirements: 8, assignedName: 14, status: 16 },
+    forceSource: 'INDIAMART', fallbackSource: 'INDIAMART' },
+  { key: 'FB_INSTA', sheetName: 'FB & INSTA', endCol: 'K',
+    map: { leadId: 0, date: 1, customerName: 2, contact: 3, city: 4, clientRequirement: 5, detailRequirements: 6, leadSource: 8, assignedName: 9, status: 10 },
+    forceSource: null, fallbackSource: 'Facebook' },
+  { key: 'CORP_FB', sheetName: 'Corp FB', endCol: 'K',
+    map: { leadId: 0, date: 1, customerName: 2, contact: 5, city: 4, clientRequirement: 6, detailRequirements: 7, leadSource: 8, assignedName: 9, status: 10 },
+    forceSource: null, fallbackSource: 'Corp FB' },
+];
+
+function colIdx(letter: string): number {
+  let col = 0;
+  const up = letter.toUpperCase();
+  for (let i = 0; i < up.length; i++) col = col * 26 + (up.charCodeAt(i) - 64);
+  return col - 1;
+}
+
+function fmtDate(val: any): string {
+  if (val === null || val === undefined || val === '') return '';
+  if (typeof val === 'number') return (val > 20000 && val < 60000) ? new Date(Math.round((val - 25569) * 86400 * 1000)).toISOString().slice(0, 10) : '';
+  const s = String(val).trim();
+  // dd/mm/yyyy (India), dd-mm-yyyy, dd.mm.yyyy, optional time suffix
+  let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+  if (m) { const dd = +m[1], mm = +m[2]; return (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) ? m[3] + '-' + (mm < 10 ? '0' : '') + mm + '-' + (dd < 10 ? '0' : '') + dd : ''; }
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+}
+
+
+// ---------- Lead FollowUps (Sheet -> DB) ----------
+const FU_SHEET = 'Lead FollowUps';
+const FU_MAX_PER_RUN = 1500;   // catch-up in chunks so a run never times out
+const pad2 = (n: number) => (n < 10 ? '0' : '') + n;
+
+function serialToUtc(n: number): Date { return new Date(Math.round((n - 25569) * 86400 * 1000)); }
+
+function normDate(v: any): string {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'number') return serialToUtc(v).toISOString().slice(0, 10);
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return m[1] + '-' + pad2(+m[2]) + '-' + pad2(+m[3]);
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/); // dd/mm/yyyy (India)
+  if (m) return m[3] + '-' + pad2(+m[2]) + '-' + pad2(+m[1]);
+  return s;
+}
+
+function normTime(v: any): string {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'number') {
+    const total = Math.round((v - Math.floor(v)) * 1440);
+    return pad2(Math.floor(total / 60) % 24) + ':' + pad2(total % 60);
+  }
+  const s = String(v).trim();
+  const m = s.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])?/);
+  if (!m) return s;
+  let h = +m[1];
+  if (m[3]) { const pm = m[3].toLowerCase() === 'pm'; if (pm && h < 12) h += 12; if (!pm && h === 12) h = 0; }
+  return pad2(h) + ':' + m[2];
+}
+
+function normTimestamp(v: any): string | null {
+  if (typeof v === 'number') return new Date(serialToUtc(v).getTime() - 330 * 60000).toISOString(); // sheet time is IST
+  if (typeof v === 'string' && v.trim()) { const d = new Date(v.trim()); return isNaN(d.getTime()) ? null : d.toISOString(); }
+  return null;
+}
+
+async function ingestFollowUps(sb: any, sheets: any) {
+  const stateKey = 'ingest:' + FU_SHEET + ':last_row';
+  const { data: state } = await sb.from('sheet_sync_state').select('*').eq('key', stateKey).maybeSingle();
+  const lastRow = state ? Number(state.last_row) : 1;
+  let rows: any[][] = [];
+  try {
+    rows = await sheets.readRange(FU_SHEET, 'A' + (lastRow + 1) + ':H' + (lastRow + FU_MAX_PER_RUN), true);
+  } catch (e: any) {
+    if (!/exceeds grid limits/i.test(String(e?.message || e))) throw e; // cursor is past the last row: nothing new
+  }
+  if (!rows.length) return { source: FU_SHEET, inserted: 0, skipped: 0, hasMore: false };
+  const batch: any[] = [];
+  let skipped = 0;
+  for (const r of rows) {
+    const leadId = String((r && r[0]) ?? '').trim();
+    if (!leadId) { skipped++; continue; }
+    const rec: any = {
+      lead_id: leadId,
+      follow_date: normDate(r[1]),
+      follow_time: normTime(r[2]),
+      remark: String(r[3] ?? '').trim(),
+      lead_status: String(r[4] ?? '').trim() || 'New',
+      next_follow_date: normDate(r[5]),
+      next_follow_time: normTime(r[6]),
+      created_by: 'sheet-import',
+    };
+    const ts = normTimestamp(r[7]);
+    if (ts) rec.created_at = ts;
+    batch.push(rec);
+  }
+  // Rows the app itself appended to the sheet are already in the DB: skip exact (lead, date, time) matches.
+  const ids = Array.from(new Set(batch.map((b) => b.lead_id)));
+  const have = new Set<string>();
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data: ex } = await sb.from('follow_ups').select('lead_id, follow_date, follow_time').in('lead_id', ids.slice(i, i + 150));
+    for (const x of ex || []) have.add(x.lead_id + '|' + x.follow_date + '|' + String(x.follow_time || '').slice(0, 5));
+  }
+  const fresh = batch.filter((b) => !have.has(b.lead_id + '|' + b.follow_date + '|' + String(b.follow_time || '').slice(0, 5)));
+  const dupSkipped = batch.length - fresh.length;
+  batch.length = 0; batch.push(...fresh); skipped += dupSkipped;
+  for (let i = 0; i < batch.length; i += 300) {
+    const { error } = await sb.from('follow_ups').insert(batch.slice(i, i + 300));
+    if (error) throw new Error('follow_ups insert failed: ' + error.message); // cursor not advanced -> retried next run
+  }
+  const newLast = lastRow + rows.length;
+  const { error: stErr } = await sb.from('sheet_sync_state').upsert({ key: stateKey, last_row: newLast, last_run: new Date().toISOString() }, { onConflict: 'key' });
+  if (stErr) throw new Error('cursor update failed: ' + stErr.message);
+  await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: FU_SHEET, ok: true, detail: { inserted: batch.length, skipped, newLast } });
+  return { source: FU_SHEET, inserted: batch.length, skipped, hasMore: rows.length >= FU_MAX_PER_RUN };
+}
+
+const CHECKLIST_SS = process.env.CHECKLIST_SS_ID || '1uJDeTu_ztyDjxDfe7v10pBmvKGkr0Sfx6e6L2ebodtw';
+const DELEGATION_SS = process.env.DELEGATION_SS_ID || '1pKOvXSg_EiuhQgeRysQVNzDnHX1jFdXMIaKJJoNfcCI';
+
+function fmtSerialDate(v: any): string {
+  if (typeof v !== 'number') return String(v ?? '').trim();
+  const d = serialToUtc(v);
+  return pad2(d.getUTCDate()) + '/' + pad2(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear();
+}
+function fmtSerialDateTime(v: any): string {
+  if (typeof v !== 'number') return String(v ?? '').trim();
+  const d = serialToUtc(v);
+  const h = d.getUTCHours();
+  return fmtSerialDate(v) + ' ' + pad2(h % 12 || 12) + ':' + pad2(d.getUTCMinutes()) + (h >= 12 ? ' PM' : ' AM');
+}
+
+/** name(lower) -> email, from the Users tab (name+email only, never passwords) and the checklist Tasklist tab. */
+async function nameEmailMap(sheets: any): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+  try {
+    for (const r of await sheets.readRange('Users', 'A2:D200')) {
+      const e = String(r[0] ?? '').trim().toLowerCase(), n = String(r[3] ?? '').trim().toLowerCase();
+      if (e && n) map[n] = e;
+    }
+  } catch (_) { /* optional */ }
+  try {
+    for (const r of await sheets.readRange('Tasklist', 'A2:I500', false, CHECKLIST_SS)) {
+      const n = String(r[3] ?? '').trim().toLowerCase(), e = String(r[8] ?? '').trim().toLowerCase();
+      if (n && e && !map[n]) map[n] = e;
+    }
+  } catch (_) { /* optional */ }
+  return map;
+}
+
+/** Replace table contents when the sheet content changed (hash kept in sheet_sync_state.extra). */
+async function replaceIfChanged(sb: any, table: string, rows: any[], onlyImported = false) {
+  const { createHash } = await import('crypto');
+  const hash = createHash('sha1').update(JSON.stringify(rows)).digest('hex');
+  const key = 'ingest:' + table + ':hash';
+  const { data: st } = await sb.from('sheet_sync_state').select('extra').eq('key', key).maybeSingle();
+  if (st?.extra?.hash === hash) return { changed: false };
+  const del = sb.from(table).delete();
+  const { error: dErr } = await (onlyImported ? del.eq('generated_by', 'sheet-import') : del.not('id', 'is', null));
+  if (dErr) throw new Error(table + ' clear failed: ' + dErr.message);
+  for (let i = 0; i < rows.length; i += 300) {
+    const { error } = await sb.from(table).insert(rows.slice(i, i + 300));
+    if (error) { await sb.from('sheet_sync_state').delete().eq('key', key); throw new Error(table + ' insert failed: ' + error.message); }
+  }
+  await sb.from('sheet_sync_state').upsert({ key, last_row: rows.length, last_run: new Date().toISOString(), extra: { hash } }, { onConflict: 'key' });
+  await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: table, ok: true, detail: { rows: rows.length } });
+  return { changed: true };
+}
+
+/** Pending checklist tasks (Done On empty) from "Master Task". */
+async function syncChecklist(sb: any, sheets: any) {
+  const names = await nameEmailMap(sheets);
+  const rows: any[][] = await sheets.readRange('Master Task', 'A2:J20000', true, CHECKLIST_SS);
+  const out: any[] = [];
+  for (const r of rows) {
+    if (!r || r[0] === '' || r[0] == null) continue;
+    if (r[4] !== '' && r[4] != null) continue; // already done
+    const email = (String(r[8] ?? '').trim() || names[String(r[1] ?? '').trim().toLowerCase()] || '').toLowerCase();
+    if (!email || !email.includes('@')) continue;
+    out.push({
+      user_email: email, task_id: String(r[0]), task: String(r[2] ?? '').trim(),
+      planned_time: fmtSerialDateTime(r[5]), frequency: String(r[6] ?? '').trim(),
+      department: String(r[7] ?? '').trim(), updation_link: String(r[9] ?? '').trim(),
+    });
+  }
+  const res = await replaceIfChanged(sb, 'checklist', out);
+  return { source: 'Checklist', pending: out.length, ...res };
+}
+
+/** Pending delegated work (Status != Completed) from "Delegated work". */
+async function syncDelegation(sb: any, sheets: any) {
+  const names = await nameEmailMap(sheets);
+  const rows: any[][] = await sheets.readRange('Delegated work', 'A2:M5000', true, DELEGATION_SS);
+  const out: any[] = [];
+  for (const r of rows) {
+    if (!r || !r[6]) continue;
+    if (/^complet/i.test(String(r[8] ?? '').trim())) continue;
+    const email = (String(r[10] ?? '').trim() || names[String(r[2] ?? '').trim().toLowerCase()] || '').toLowerCase();
+    if (!email || !email.includes('@')) continue;
+    out.push({
+      user_email: email, task_code: String(r[6]).trim(), assigned_by: String(r[1] ?? '').trim(),
+      work: String(r[3] ?? '').trim(), deadline: fmtSerialDate(r[4]), updation_link: String(r[7] ?? '').trim(),
+    });
+  }
+  const res = await replaceIfChanged(sb, 'delegation', out);
+  return { source: 'Delegation', pending: out.length, ...res };
+}
+
+/** Old quotations from the "Quotations" tab (PDF URL kept as-is). App-generated rows are never touched. */
+async function syncQuotations(sb: any, sheets: any) {
+  const rows: any[][] = await sheets.readRange('Quotations', 'A2:T5000', true);
+  const num = (v: any) => (typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/,/g, '')) || 0);
+  const out: any[] = [];
+  for (const r of rows) {
+    const leadId = String((r && r[1]) ?? '').trim();
+    if (!leadId) continue;
+    let items: any[] = [];
+    try { const j = JSON.parse(String(r[10] ?? '[]')); if (Array.isArray(j)) items = j; } catch (_) { /* keep empty */ }
+    const rec: any = {
+      lead_id: leadId, customer_name: String(r[2] ?? '').trim(), contact_person: String(r[3] ?? '').trim(),
+      mobile: String(r[4] ?? '').trim(), location: String(r[5] ?? '').trim(),
+      event_date: typeof r[6] === 'number' ? fmtSerialDate(r[6]) : String(r[6] ?? '').trim(), days: String(r[7] ?? '').trim(),
+      sales_person: String(r[8] ?? '').trim(), sales_person_mobile: String(r[9] ?? '').trim(),
+      items, total: num(r[11]), gst_percent: num(r[12]) || 18, gst_amount: num(r[13]), grand_total: num(r[14]),
+      // Columns after Grand Total vary between old/new rows: find URL / status by content instead of fixed index.
+      status: String(r[r.length - 1] ?? '').trim() || 'Hot Lead', generated_by: 'sheet-import',
+      pdf_url: String(r.slice(15).find((c: any) => /^https?:\/\//i.test(String(c ?? ''))) ?? '').trim(),
+    };
+    const ts = normTimestamp(r[0]);
+    if (ts) rec.created_at = ts;
+    out.push(rec);
+  }
+  // Quotations generated in the app are pushed to the sheet too: drop those sheet rows so they aren't duplicated.
+  const { data: appQ } = await sb.from('quotations').select('lead_id, customer_name, grand_total').neq('generated_by', 'sheet-import');
+  const qk = (l: any, c: any, g: any) => String(l).trim() + '|' + String(c || '').trim().toLowerCase() + '|' + Math.round(Number(g) || 0);
+  const appKeys = new Set((appQ || []).map((q: any) => qk(q.lead_id, q.customer_name, q.grand_total)));
+  const outF = out.filter((r) => !appKeys.has(qk(r.lead_id, r.customer_name, r.grand_total)));
+  const res = await replaceIfChanged(sb, 'quotations', outF, true);
+  return { source: 'Quotations', rows: outF.length, ...res };
+}
+
+/** Sheet edits to EXISTING follow-up rows (remark / status / next follow-up) -> DB, and rows missing in the DB get inserted. */
+async function refreshFollowUps(sb: any, sheets: any) {
+  const { fetchAll } = await import('@/lib/supabase');
+  const rows: any[][] = await sheets.readRange(FU_SHEET, 'A2:H200000', true);
+  if (!rows.length) return { source: 'RefreshFollowUps', skipped: 'empty read' };
+  const { data: db } = await fetchAll(() => sb.from('follow_ups').select('id, lead_id, follow_date, follow_time, remark, lead_status, next_follow_date, next_follow_time, created_at'));
+  const key = (l: any, d: any, t: any) => String(l).trim() + '|' + String(d || '') + '|' + String(t || '').slice(0, 5);
+  const byKey: Record<string, any> = {};
+  for (const f of db || []) byKey[key(f.lead_id, f.follow_date, f.follow_time)] = f;
+  const recent = Date.now() - 10 * 60000;
+  let updated = 0; const missing: any[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const leadId = String((r && r[0]) ?? '').trim();
+    if (!leadId) continue;
+    const fd = normDate(r[1]), ft = normTime(r[2]);
+    const k = key(leadId, fd, ft);
+    if (seen.has(k)) continue; seen.add(k);
+    const cur = byKey[k];
+    const remark = String(r[3] ?? '').trim(), st = String(r[4] ?? '').trim() || 'New';
+    const nd = normDate(r[5]), nt = normTime(r[6]);
+    if (!cur) {
+      if (missing.length < 200 && fd) {
+        const rec: any = { lead_id: leadId, follow_date: fd, follow_time: ft, remark, lead_status: st, next_follow_date: nd, next_follow_time: nt, created_by: 'sheet-import' };
+        const ts = normTimestamp(r[7]); if (ts) rec.created_at = ts;
+        missing.push(rec);
+      }
+      continue;
+    }
+    if (new Date(cur.created_at).getTime() > recent) continue; // fresh app write: sheet may not have caught up
+    const diff: any = {};
+    if ((cur.remark || '') !== remark) diff.remark = remark;
+    if ((cur.lead_status || '') !== st) diff.lead_status = st;
+    if ((cur.next_follow_date || '') !== nd) diff.next_follow_date = nd;
+    if (String(cur.next_follow_time || '').slice(0, 5) !== nt) diff.next_follow_time = nt;
+    if (Object.keys(diff).length && updated < 300) {
+      const { error } = await sb.from('follow_ups').update(diff).eq('id', cur.id);
+      if (!error) updated++;
+    }
+  }
+  let inserted = 0;
+  for (let i = 0; i < missing.length; i += 100) {
+    const { error } = await sb.from('follow_ups').insert(missing.slice(i, i + 100));
+    if (!error) inserted += Math.min(100, missing.length - i);
+  }
+  return { source: 'RefreshFollowUps', scanned: rows.length, updated, inserted };
+}
+
+/** Sheet edits to EXISTING leads (assigned name, status, customer/contact/city/requirement text) -> DB.
+ *  Skips leads edited in the app in the last 10 min or with a pending/recent outbox write, so app edits are never reverted. */
+async function refreshExistingLeads(sb: any, sheets: any) {
+  const { fetchAll } = await import('@/lib/supabase');
+  const MAX_UPDATES = 400;
+  const sinceIso = new Date(Date.now() - 10 * 60000).toISOString();
+  const protectedIds = new Set<string>();
+  const { data: pend } = await sb.from('sheet_outbox').select('row_id').eq('table_name', 'leads').eq('status', 'pending');
+  const { data: recent } = await sb.from('sheet_outbox').select('row_id').eq('table_name', 'leads').gte('processed_at', sinceIso);
+  for (const r of [...(pend || []), ...(recent || [])]) protectedIds.add(String(r.row_id));
+  let updated = 0, scanned = 0, inserted = 0; const insertErr: string[] = [];
+  for (const src of SOURCES) {
+    const rows = await sheets.readRange(src.sheetName, 'A2:' + sheets.colLetter(colIdx(src.endCol) + 1) + '200000');
+    const { data: db } = await fetchAll(() => sb.from('leads').select('id, lead_id, customer_name, contact, email, city, client_requirement, detail_requirements, lead_source, assigned_name, base_status, updated_at').eq('source_key', src.key));
+    const byId: Record<string, any> = {};
+    for (const l of db || []) byId[l.lead_id] = l;
+    const m: any = src.map;
+    for (const row of rows) {
+      const leadId = String((row && row[m.leadId]) ?? '').trim();
+      const cur = leadId && byId[leadId];
+      if (leadId && !cur) {
+        // Row present in the sheet but missing in the app (cursor skipped it): insert, independent of the cursor.
+        if (inserted >= 200) continue;
+        const dateRaw = row[m.date];
+        const leadDate = typeof dateRaw === 'number'
+          ? new Date(Math.round((dateRaw - 25569) * 86400 * 1000)).toISOString().slice(0, 10) : fmtDate(dateRaw);
+        const g = (i: number | undefined) => (i === undefined ? '' : String(row[i] ?? '').trim());
+        const { error } = await sb.from('leads').insert({
+          row_key: src.key + '-' + leadId, lead_id: leadId, source_key: src.key, lead_date: leadDate || null,
+          customer_name: g(m.customerName), contact: g(m.contact), email: g(m.email), city: g(m.city),
+          client_requirement: g(m.clientRequirement), detail_requirements: g(m.detailRequirements),
+          lead_source: src.forceSource || g(m.leadSource) || src.fallbackSource,
+          assigned_name: g(m.assignedName), base_status: g(m.status) || 'New',
+        });
+        if (!error) { inserted++; byId[leadId] = { id: null }; } else if (insertErr.length < 3) insertErr.push(leadId + ': ' + error.message.slice(0, 100));
+        continue;
+      }
+      if (!cur || !cur.id) continue;
+      scanned++;
+      if (protectedIds.has(leadId) || (cur.updated_at && cur.updated_at > sinceIso)) continue;
+      const t = (i: number | undefined) => (i === undefined ? undefined : String(row[i] ?? '').trim());
+      const next: any = {
+        customer_name: t(m.customerName), contact: t(m.contact), email: t(m.email), city: t(m.city),
+        client_requirement: t(m.clientRequirement), detail_requirements: t(m.detailRequirements),
+        assigned_name: t(m.assignedName), base_status: t(m.status) || 'New',
+      };
+      if (src.forceSource || m.leadSource !== undefined) next.lead_source = src.forceSource || t(m.leadSource) || src.fallbackSource;
+      const patch: any = {};
+      for (const k of Object.keys(next)) if (next[k] !== undefined && String(cur[k] ?? '') !== next[k]) patch[k] = next[k];
+      if (!Object.keys(patch).length) continue;
+      if (updated >= MAX_UPDATES) continue; // finish remaining diffs on the next runs
+      const { error } = await sb.from('leads').update(patch).eq('id', cur.id);
+      if (!error) updated++;
+    }
+  }
+  return { source: 'RefreshLeads', scanned, updated, inserted, insertErr: insertErr.length ? insertErr : undefined };
+}
+
+/** Sheet deletions -> DB. Rows deleted from the lead tabs / Lead FollowUps are removed from the app too.
+ *  Safety: skipped when the sheet read is empty or when it would remove >25% (and >20 rows) at once.
+ *  Deleting sheet rows shifts row numbers, so the "new rows" cursors are pulled back (re-reads are de-duplicated). */
+async function removeDeleted(sb: any, sheets: any) {
+  const { fetchAll } = await import('@/lib/supabase');
+  const out: any = { source: 'RemoveDeleted', leadsRemoved: 0, followUpsRemoved: 0, blocked: [] as string[] };
+  const removedLeadIds: string[] = [];
+
+  for (const src of SOURCES) {
+    const rows = await sheets.readRange(src.sheetName, 'A2:A200000');
+    const inSheet = new Set<string>();
+    for (const r of rows) { const v = String((r && r[0]) ?? '').trim(); if (v) inSheet.add(v); }
+    if (!inSheet.size) { out.blocked.push(src.sheetName + ': empty read'); continue; }
+    const { data: db } = await fetchAll(() => sb.from('leads').select('id, lead_id').eq('source_key', src.key));
+    const gone = (db || []).filter((l: any) => !inSheet.has(String(l.lead_id).trim()));
+    if (!gone.length) continue;
+    if (gone.length > 20 && gone.length > (db || []).length * 0.25) { out.blocked.push(src.sheetName + ': ' + gone.length + ' rows would be removed'); continue; }
+    for (let i = 0; i < gone.length; i += 100) {
+      const { error } = await sb.from('leads').delete().in('id', gone.slice(i, i + 100).map((g: any) => g.id));
+      if (error) throw new Error('lead delete failed: ' + error.message);
+    }
+    out.leadsRemoved += gone.length;
+    removedLeadIds.push(...gone.map((g: any) => String(g.lead_id)));
+    const key = 'ingest:' + src.sheetName + ':last_row';
+    const { data: st } = await sb.from('sheet_sync_state').select('last_row').eq('key', key).maybeSingle();
+    const back = Math.max(1, Math.min(Number(st?.last_row || 1), rows.length + 1) - gone.length - 5);
+    await sb.from('sheet_sync_state').upsert({ key, last_row: back, last_run: new Date().toISOString() }, { onConflict: 'key' });
+    await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: src.sheetName, ok: true, detail: { removed: gone.length, ids: gone.slice(0, 30).map((g: any) => g.lead_id) } });
+  }
+
+  // follow-ups of removed leads (only when that lead_id no longer exists in any source)
+  if (removedLeadIds.length) {
+    for (let i = 0; i < removedLeadIds.length; i += 100) {
+      const chunk = removedLeadIds.slice(i, i + 100);
+      const { data: still } = await sb.from('leads').select('lead_id').in('lead_id', chunk);
+      const keep = new Set((still || []).map((x: any) => x.lead_id));
+      const del = chunk.filter((x) => !keep.has(x));
+      if (del.length) await sb.from('follow_ups').delete().in('lead_id', del);
+    }
+  }
+
+  // follow-up rows deleted from the 'Lead FollowUps' tab
+  const { data: pend } = await sb.from('sheet_outbox').select('id').eq('table_name', 'follow_ups').eq('status', 'pending').limit(1);
+  if (!(pend && pend.length)) {
+    let rows: any[][] = [];
+    try { rows = await sheets.readRange(FU_SHEET, 'A2:H200000', true); } catch (e: any) { if (!/exceeds grid limits/i.test(String(e?.message || e))) throw e; }
+    const k = (l: string, d: string, t: string) => l + '|' + d + '|' + String(t || '').slice(0, 5);
+    const inSheet = new Set<string>();
+    for (const r of rows) { const l = String((r && r[0]) ?? '').trim(); if (l) inSheet.add(k(l, normDate(r[1]), normTime(r[2]))); }
+    if (!inSheet.size) { out.blocked.push(FU_SHEET + ': empty read'); }
+    else {
+      const recent = new Date(Date.now() - 15 * 60000).toISOString();
+      const { data: db } = await fetchAll(() => sb.from('follow_ups').select('id, lead_id, follow_date, follow_time, created_at'));
+      const gone = (db || []).filter((f: any) => f.created_at < recent && !inSheet.has(k(String(f.lead_id).trim(), String(f.follow_date || ''), f.follow_time)));
+      if (gone.length > 20 && gone.length > (db || []).length * 0.25) out.blocked.push(FU_SHEET + ': ' + gone.length + ' rows would be removed');
+      else if (gone.length) {
+        for (let i = 0; i < gone.length; i += 100) {
+          const { error } = await sb.from('follow_ups').delete().in('id', gone.slice(i, i + 100).map((g: any) => g.id));
+          if (error) throw new Error('follow_up delete failed: ' + error.message);
+        }
+        out.followUpsRemoved = gone.length;
+        const key = 'ingest:' + FU_SHEET + ':last_row';
+        const { data: st } = await sb.from('sheet_sync_state').select('last_row').eq('key', key).maybeSingle();
+        const back = Math.max(1, Math.min(Number(st?.last_row || 1), rows.length + 1) - gone.length - 5);
+        await sb.from('sheet_sync_state').upsert({ key, last_row: back, last_run: new Date().toISOString() }, { onConflict: 'key' });
+        await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: FU_SHEET, ok: true, detail: { removed: gone.length } });
+      }
+    }
+  }
+  if (!out.blocked.length) delete out.blocked;
+  return out;
+}
+
+export async function GET(req: NextRequest) {
+  if (!(await isCronAuthorized(req))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const { supabaseAdmin } = await import('@/lib/supabase');
+  const sheets = await import('@/lib/sheets');
+  const sb = supabaseAdmin();
+  // Overlap guard (cron now fires every 30s): skip if another run started < 25s ago.
+  const { data: lock } = await sb.from('sheet_sync_state').select('last_run').eq('key', 'ingest:lock').maybeSingle();
+  if (lock?.last_run && Date.now() - new Date(lock.last_run).getTime() < 25000) return NextResponse.json({ ok: true, skipped: 'recent run' });
+  await sb.from('sheet_sync_state').upsert({ key: 'ingest:lock', last_row: 0, last_run: new Date().toISOString() }, { onConflict: 'key' });
+  const summary: any = { sources: [] };
+
+  for (const src of SOURCES) {
+    try {
+      const stateKey = 'ingest:' + src.sheetName + ':last_row';
+      const { data: state } = await sb.from('sheet_sync_state').select('*').eq('key', stateKey).maybeSingle();
+      const lastRow = state ? Number(state.last_row) : 1;
+
+      const colEnd = colIdx(src.endCol) + 1;
+      const a1 = 'A' + (lastRow + 1) + ':' + sheets.colLetter(colEnd) + '200000';
+      const rows = await sheets.readRange(src.sheetName, a1);
+      let inserted = 0, skipped = 0, newLast = lastRow;
+      const insertErrors: string[] = [];
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        newLast = lastRow + i; // will advance even for blank rows
+        if (!row || row.every((c) => c === '' || c === null || c === undefined)) { skipped++; continue; }
+        const m = src.map;
+        const leadId = String(row[m.leadId] ?? '').trim();
+        if (!leadId) { skipped++; continue; }
+        const dateRaw = row[m.date];
+        const leadDate = typeof dateRaw === 'number'
+          ? new Date(Math.round((dateRaw - 25569) * 86400 * 1000)).toISOString().slice(0, 10)
+          : fmtDate(dateRaw);
+
+        // upsert by (source_key, lead_id) — new rows only; DB edits win
+        const { data: existing } = await sb.from('leads').select('id')
+          .eq('lead_id', leadId).eq('source_key', src.key).maybeSingle();
+        if (existing) { skipped++; continue; }
+        const status = String(row[m.status] ?? '').trim() || 'New';
+        let leadSource = src.forceSource || String(row[m.leadSource] ?? '').trim() || src.fallbackSource;
+        const { error } = await sb.from('leads').insert({
+          row_key: src.key + '-' + leadId,
+          lead_id: leadId, source_key: src.key,
+          lead_date: leadDate || null,
+          customer_name: String(row[m.customerName] ?? '').trim(),
+          contact: String(row[m.contact] ?? '').trim(),
+          email: m.email === undefined ? '' : String(row[m.email] ?? '').trim(),
+          city: String(row[m.city] ?? '').trim(),
+          client_requirement: String(row[m.clientRequirement] ?? '').trim(),
+          detail_requirements: String(row[m.detailRequirements] ?? '').trim(),
+          lead_source: leadSource,
+          assigned_name: String(row[m.assignedName] ?? '').trim(),
+          base_status: status,
+        });
+        if (error) { skipped++; insertErrors.push(leadId + ': ' + error.message.slice(0, 120)); continue; }
+        inserted++;
+      }
+      await sb.from('sheet_sync_state').upsert({ key: stateKey, last_row: newLast, last_run: new Date().toISOString() }, { onConflict: 'key' });
+      await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: src.sheetName, ok: true, detail: { inserted, skipped, newLast } });
+      summary.sources.push({ source: src.sheetName, inserted, skipped, errors: insertErrors.length ? insertErrors.slice(0, 5) : undefined });
+    } catch (e: any) {
+      await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: src.sheetName, ok: false, error: String(e?.message || e).substring(0, 500) });
+      summary.sources.push({ source: src.sheetName, error: String(e?.message || e) });
+    }
+  }
+  try {
+    summary.sources.push(await ingestFollowUps(sb, sheets));
+  } catch (e: any) {
+    await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: FU_SHEET, ok: false, error: String(e?.message || e).substring(0, 500) });
+    summary.sources.push({ source: FU_SHEET, error: String(e?.message || e) });
+  }
+  for (const fn of [removeDeleted, refreshExistingLeads, refreshFollowUps, syncChecklist, syncDelegation, syncQuotations]) {
+    try { summary.sources.push(await fn(sb, sheets)); }
+    catch (e: any) { summary.sources.push({ source: fn.name, error: String(e?.message || e).slice(0, 300) }); }
+  }
+  return NextResponse.json({ ok: true, ...summary });
+}
