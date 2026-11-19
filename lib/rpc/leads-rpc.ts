@@ -377,8 +377,8 @@ export async function handleImportLeads(req: NextRequest, args: any[]) {
       if (!allowed) { skipped++; errors.push('Row ' + (i + 2) + ': You cannot import a lead assigned to ' + (assigned || 'blank') + '.'); continue; }
     }
     const patch: any = {
-      lead_id: leadId, row_key: String(r.sourceKey || 'IMPORT').trim().toUpperCase() + '-' + leadId,
-      source_key: String(r.sourceKey || 'IMPORT').trim().toUpperCase(),
+      lead_id: leadId, row_key: existing?.row_key || (String(r.sourceKey || 'IMPORT').trim().toUpperCase() + '-' + leadId),
+      source_key: existing?.source_key || String(r.sourceKey || 'IMPORT').trim().toUpperCase(),
       lead_date: r.date || null, customer_name: String(r.customerName || '').trim(),
       contact: String(r.contact || '').trim(), city: String(r.city || '').trim(),
       client_requirement: String(r.clientRequirement || '').trim(),
@@ -386,7 +386,7 @@ export async function handleImportLeads(req: NextRequest, args: any[]) {
       lead_source: String(r.leadSource || '').trim(), assigned_name: assigned,
       base_status: safeStatus(r.leadStatus), updated_at: new Date().toISOString(),
     };
-    const { data: existing } = await sb.from('leads').select('id').eq('lead_id', leadId).maybeSingle();
+    const { data: existing } = await sb.from('leads').select('id,row_key,source_key').eq('lead_id', leadId).maybeSingle();
     const result = existing
       ? await sb.from('leads').update(patch).eq('id', existing.id)
       : await sb.from('leads').insert(patch);
@@ -442,7 +442,7 @@ export async function handleImportFollowUps(req: NextRequest, args: any[]) {
     if (!allowed.has(leadId)) { errors.push('Row ' + (i + 2) + ': Lead not found or not accessible: ' + leadId); return; }
     inserts.push({ lead_id: leadId, follow_date: r.followDate, follow_time: r.followTime || '',
       remark: r.remark || '', lead_status: safeStatus(r.leadStatus),
-      next_follow_date: r.nextFollowDate || null, next_follow_time: r.nextFollowTime || '', created_by: s.email });
+      next_follow_date: r.nextFollowDate || null, next_follow_time: r.nextFollowTime || '', created_by: s.userId });
   });
   let imported = 0;
   for (let i = 0; i < inserts.length; i += 100) {
