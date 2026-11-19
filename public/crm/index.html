@@ -2392,6 +2392,7 @@
     if (forceRefresh) STATE.leadState.page = 1;
     bindLeadTableToolbar();
     var toolbar = document.querySelector('#viewLead .toolbar');
+    if (toolbar) addCsvControls(toolbar, 'lead');
     if (toolbar) {
       var dateFilterHtml =
         '<input type="date" id="lead_from_date" placeholder="From Date" title="From Date" style="width:140px;">' +
@@ -2677,6 +2678,8 @@
       '</div>';
     if (forceRefresh) STATE.followUpState.page = 1;
     bindFollowUpTableToolbar();
+    var fuToolbar = document.querySelector('#viewFollowup .toolbar');
+    if (fuToolbar) addCsvControls(fuToolbar, 'followup');
     loadFollowUpData();
   }
 
@@ -3511,6 +3514,124 @@
   }
 
   // ===== EXPORT =====
+
+  // ===== CSV IMPORT / EXPORT (Leads + Follow-ups) =====
+  function addCsvControls(toolbar, kind) {
+    if (!toolbar || toolbar.querySelector('[data-csv-kind="' + kind + '"]')) return;
+    var label = kind === 'lead' ? 'Leads' : 'Follow-ups';
+    var html = '<div data-csv-kind="' + kind + '" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;width:100%;margin:2px 0 6px;">' +
+      '<button type="button" class="btn-icon" data-csv-action="import">⬆ Import ' + label + '</button>' +
+      '<button type="button" class="btn-icon" data-csv-action="export">⬇ Export ' + label + '</button>' +
+      '<button type="button" class="btn-icon" data-csv-action="sample">⇩ Sample CSV</button></div>';
+    toolbar.insertAdjacentHTML('afterbegin', html);
+    var controls = toolbar.querySelector('[data-csv-kind="' + kind + '"]');
+    controls.querySelector('[data-csv-action="import"]').addEventListener('click', function () { chooseCsvFile(kind); });
+    controls.querySelector('[data-csv-action="export"]').addEventListener('click', function () { exportCsvModule(kind, this); });
+    controls.querySelector('[data-csv-action="sample"]').addEventListener('click', function () { downloadCsvSample(kind); });
+  }
+
+  function csvDownload(content, filename) {
+    var blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a'); a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function downloadCsvSample(kind) {
+    var leadHeaders = ['Lead ID','Date','Customer Name','Contact','City','Client Requirement','Detail Requirements','Lead Source','Assigned Name','Lead Status','Source Key'];
+    var fuHeaders = ['Lead ID','Follow Date','Follow Time','Remark','Lead Status','Next Follow Date','Next Follow Time'];
+    var sample = kind === 'lead'
+      ? [leadHeaders, ['LD-TEST-001','2026-11-19','Sample Customer','9876543210','Jaipur','Wedding event','500 guests','Website','Indu Hada','New','IMPORT']]
+      : [fuHeaders, ['LD-TEST-001','2026-11-19','11:30','Called customer; shared details','New','2026-11-21','15:00']];
+    var csv = sample.map(function (row) { return row.map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','); }).join('\r\n');
+    csvDownload(csv, (kind === 'lead' ? 'leads' : 'follow-ups') + '-sample.csv');
+    toast('Sample CSV downloaded. Fill rows and upload it.', 'success');
+  }
+
+  function parseCsvText(text) {
+    var rows = [], row = [], cell = '', quoted = false;
+    text = String(text || '').replace(/^\uFEFF/, '');
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i], next = text[i + 1];
+      if (quoted) {
+        if (ch === '"' && next === '"') { cell += '"'; i++; }
+        else if (ch === '"') quoted = false;
+        else cell += ch;
+      } else if (ch === '"') quoted = true;
+      else if (ch === ',') { row.push(cell); cell = ''; }
+      else if (ch === '\n') { row.push(cell.replace(/\r$/, '')); rows.push(row); row = []; cell = ''; }
+      else cell += ch;
+    }
+    if (cell.length || row.length) { row.push(cell.replace(/\r$/, '')); rows.push(row); }
+    return rows.filter(function (r) { return r.some(function (v) { return String(v).trim() !== ''; }); });
+  }
+
+  function csvKey(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+  function chooseCsvFile(kind) {
+    var input = document.getElementById('csvImportInput');
+    if (!input) {
+      input = document.createElement('input'); input.type = 'file'; input.id = 'csvImportInput';
+      input.accept = '.csv,text/csv'; input.style.display = 'none'; document.body.appendChild(input);
+    }
+    input.value = '';
+    input.onchange = function () {
+      var file = input.files && input.files[0]; if (!file) return;
+      if (file.size > 5 * 1024 * 1024) { toast('CSV must be smaller than 5 MB.', 'error'); return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          var rows = parseCsvText(reader.result);
+          if (rows.length < 2) { toast('CSV has no data rows.', 'error'); return; }
+          if (rows.length - 1 > 500) { toast('Maximum 500 rows per import. Split the file and retry.', 'error'); return; }
+          var headers = rows[0].map(csvKey);
+          var data = rows.slice(1).map(function (r) {
+            var o = {}; headers.forEach(function (h, i) { o[h] = String(r[i] || '').trim(); }); return o;
+          });
+          var get = function (o, names) { for (var j = 0; j < names.length; j++) if (o[csvKey(names[j])] !== undefined) return o[csvKey(names[j])]; return ''; };
+          var payload = kind === 'lead' ? data.map(function (o) { return {
+            leadId:get(o,['Lead ID','LeadId']), date:get(o,['Date','Lead Date']), customerName:get(o,['Customer Name']),
+            contact:get(o,['Contact','Phone']), city:get(o,['City']), clientRequirement:get(o,['Client Requirement']),
+            detailRequirements:get(o,['Detail Requirements']), leadSource:get(o,['Lead Source']),
+            assignedName:get(o,['Assigned Name']), leadStatus:get(o,['Lead Status','Status']), sourceKey:get(o,['Source Key'])
+          }; }) : data.map(function (o) { return {
+            leadId:get(o,['Lead ID','LeadId']), followDate:get(o,['Follow Date','Follow-up Date']),
+            followTime:get(o,['Follow Time']), remark:get(o,['Remark','Remarks']), leadStatus:get(o,['Lead Status','Status']),
+            nextFollowDate:get(o,['Next Follow Date']), nextFollowTime:get(o,['Next Follow Time'])
+          }; });
+          if (!window.confirm('Import ' + payload.length + ' ' + (kind === 'lead' ? 'lead' : 'follow-up') + ' rows? Existing Lead IDs in Leads will be updated. Follow-up rows will be added as history.')) return;
+          var btns = document.querySelectorAll('[data-csv-kind="' + kind + '"] button'); btns.forEach(function (b) { b.disabled = true; });
+          google.script.run.withSuccessHandler(function (res) {
+            btns.forEach(function (b) { b.disabled = false; });
+            if (!res || !res.success) { if (isSessionExpiredError(res)) handleSessionExpired(); else toast((res && res.message) || 'Import failed.', 'error'); return; }
+            toast('Import complete: ' + (res.imported || 0) + ' added, ' + (res.updated || 0) + ' updated, ' + (res.skipped || 0) + ' skipped.', 'success');
+            if (res.errors && res.errors.length) console.warn('CSV import row errors:', res.errors);
+            if (kind === 'lead') loadLeadData(); else loadFollowUpData();
+          }).withFailureHandler(function (err) {
+            btns.forEach(function (b) { b.disabled = false; });
+            toast('Import failed. Check the CSV and try again.', 'error'); console.error(err);
+          })[kind === 'lead' ? 'importLeads' : 'importFollowUps'](STATE.token, payload);
+        } catch (e) { toast('Could not read CSV: ' + e.message, 'error'); }
+      };
+      reader.onerror = function () { toast('Could not read selected file.', 'error'); };
+      reader.readAsText(file);
+    };
+    input.click();
+  }
+
+  function exportCsvModule(kind, btn) {
+    var original = btn.textContent; btn.disabled = true; btn.textContent = 'Exporting…';
+    var fn = kind === 'lead' ? 'exportLeadsCsv' : 'exportFollowUpsCsv';
+    google.script.run.withSuccessHandler(function (res) {
+      btn.disabled = false; btn.textContent = original;
+      if (!res || !res.success) { if (isSessionExpiredError(res)) handleSessionExpired(); else toast((res && res.message) || 'Export failed.', 'error'); return; }
+      csvDownload(res.csv || '', (kind === 'lead' ? 'leads' : 'follow-ups') + '-export-' + new Date().toISOString().slice(0,10) + '.csv');
+      toast('Export downloaded.', 'success');
+    }).withFailureHandler(function (err) {
+      btn.disabled = false; btn.textContent = original; toast('Export failed. Please retry.', 'error'); console.error(err);
+    })[fn](STATE.token);
+  }
+
   function exportLeads() {
     var btn = document.getElementById('exportBtn');
     var original = btn.innerHTML;
