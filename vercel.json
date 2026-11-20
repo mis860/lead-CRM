@@ -1,3 +1,19 @@
 {
-  "regions": ["bom1"]
+  "regions": [
+    "bom1"
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/ingest-sheets",
+      "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-sheets",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/reconcile-sheets",
+      "schedule": "30 21 * * *"
+    }
+  ]
 }
