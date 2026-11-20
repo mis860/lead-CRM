@@ -43,7 +43,7 @@ function fmtDate(val: any): string {
 
 // ---------- Lead FollowUps (Sheet -> DB) ----------
 const FU_SHEET = 'Lead FollowUps';
-const FU_MAX_PER_RUN = 1500;   // catch-up in chunks so a run never times out
+const FU_MAX_PER_RUN = 150;   // catch-up in chunks so a run never times out
 const pad2 = (n: number) => (n < 10 ? '0' : '') + n;
 
 function serialToUtc(n: number): Date { return new Date(Math.round((n - 25569) * 86400 * 1000)); }
@@ -453,7 +453,8 @@ export async function GET(req: NextRequest) {
       const lastRow = state ? Number(state.last_row) : 1;
 
       const colEnd = colIdx(src.endCol) + 1;
-      const a1 = 'A' + (lastRow + 1) + ':' + sheets.colLetter(colEnd) + '200000';
+      const RUN_BATCH = 150;
+      const a1 = 'A' + (lastRow + 1) + ':' + sheets.colLetter(colEnd) + (lastRow + RUN_BATCH);
       const rows = await sheets.readRange(src.sheetName, a1);
       let inserted = 0, skipped = 0, newLast = lastRow;
       const insertErrors: string[] = [];
@@ -493,6 +494,49 @@ export async function GET(req: NextRequest) {
         if (error) { skipped++; insertErrors.push(leadId + ': ' + error.message.slice(0, 120)); continue; }
         inserted++;
       }
+      let inserted = 0, skipped = 0, newLast = lastRow;
+      const insertErrors: string[] = [];
+      const candidates: any[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        newLast = lastRow + i + 1; // advance by actual sheet row, including blanks
+        if (!row || row.every((v) => v === '' || v === null || v === undefined)) { skipped++; continue; }
+        const m = src.map;
+        const leadId = String(row[m.leadId] ?? '').trim();
+        if (!leadId) { skipped++; continue; }
+        const dateRaw = row[m.date];
+        const leadDate = typeof dateRaw === 'number'
+          ? new Date(Math.round((dateRaw - 25569) * 86400 * 1000)).toISOString().slice(0, 10)
+          : fmtDate(dateRaw);
+        candidates.push({
+          row_key: src.key + '-' + leadId,
+          lead_id: leadId, source_key: src.key,
+          lead_date: leadDate || null,
+          customer_name: String(row[m.customerName] ?? '').trim(),
+          contact: String(row[m.contact] ?? '').trim(),
+          email: m.email === undefined ? '' : String(row[m.email] ?? '').trim(),
+          city: String(row[m.city] ?? '').trim(),
+          client_requirement: String(row[m.clientRequirement] ?? '').trim(),
+          detail_requirements: String(row[m.detailRequirements] ?? '').trim(),
+          lead_source: src.forceSource || String(row[m.leadSource] ?? '').trim() || src.fallbackSource,
+          assigned_name: String(row[m.assignedName] ?? '').trim(),
+          base_status: String(row[m.status] ?? '').trim() || 'New',
+        });
+      }
+      if (candidates.length) {
+        const { data: existingRows, error: lookupError } = await sb.from('leads')
+          .select('lead_id').eq('source_key', src.key)
+          .in('lead_id', candidates.map((x) => x.lead_id));
+        if (lookupError) throw new Error('existing lead lookup failed: ' + lookupError.message);
+        const have = new Set((existingRows || []).map((x: any) => String(x.lead_id)));
+        const fresh = candidates.filter((x) => !have.has(String(x.lead_id)));
+        skipped += candidates.length - fresh.length;
+        if (fresh.length) {
+          const { error } = await sb.from('leads').upsert(fresh, { onConflict: 'source_key,lead_id', ignoreDuplicates: true });
+          if (error) throw new Error('lead batch insert failed: ' + error.message);
+          inserted = fresh.length;
+        }
+      }
       await sb.from('sheet_sync_state').upsert({ key: stateKey, last_row: newLast, last_run: new Date().toISOString() }, { onConflict: 'key' });
       await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: src.sheetName, ok: true, detail: { inserted, skipped, newLast } });
       summary.sources.push({ source: src.sheetName, inserted, skipped, errors: insertErrors.length ? insertErrors.slice(0, 5) : undefined });
@@ -507,11 +551,8 @@ export async function GET(req: NextRequest) {
     await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: FU_SHEET, ok: false, error: String(e?.message || e).substring(0, 500) });
     summary.sources.push({ source: FU_SHEET, error: String(e?.message || e) });
   }
-  // Do not delete CRM rows merely because they are absent from a sheet range.
-  // The configured ranges are ingestion/update sources; destructive deletion is intentionally disabled.
-  for (const fn of [refreshExistingLeads, refreshFollowUps]) {
-    try { summary.sources.push(await fn(sb, sheets)); }
-    catch (e: any) { summary.sources.push({ source: fn.name, error: String(e?.message || e).slice(0, 300) }); }
-  }
+  // Full-sheet refresh scans were removed from this request path: each invocation
+  // processes a bounded 150-row page to stay within Vercel's 60-second limit.
+  // Follow-up import is cursor-based and also bounded to 150 rows per invocation.
   return NextResponse.json({ ok: true, ...summary });
 }
