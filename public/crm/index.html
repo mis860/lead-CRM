@@ -1592,15 +1592,15 @@
   }
   function getToday() { var d = new Date(); return d.toISOString().split('T')[0]; }
   function getNow() { var d = new Date(); return d.toTimeString().slice(0, 5); }
-  // IndiaMART lead dates are displayed as MM/DD/YYYY; keep database values canonical.
-  function formatLeadDate(value, source) {
+  // Display every lead date consistently as ISO YYYY-MM-DD; database values remain unchanged.
+  function formatLeadDate(value) {
     if (!value) return '—';
-    if (String(source || '').trim().toUpperCase() !== 'INDIAMART') return String(value);
     var s = String(value).trim();
     var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ].*)?$/);
-    if (m) return String(m[2]).padStart(2, '0') + '/' + String(m[3]).padStart(2, '0') + '/' + m[1];
+    if (m) return m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0');
+    // Imported slash/dash dates are interpreted month-first, matching the Sheets ingestion rule.
     m = s.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
-    if (m) return String(m[1]).padStart(2, '0') + '/' + String(m[2]).padStart(2, '0') + '/' + m[3];
+    if (m) return m[3] + '-' + String(m[1]).padStart(2, '0') + '-' + String(m[2]).padStart(2, '0');
     return s;
   }
 
@@ -2314,7 +2314,7 @@
                     '<span class="lead-customer">' + escapeHtml(l.customerName || '—') + '</span>' +
                     '<span class="lead-contact">' + phoneHtml + '</span>' +
                     '<span class="badge ' + statusClass + '">' + escapeHtml(l.leadStatus || 'New') + '</span>' +
-                    '<span style="font-size:10px;color:var(--text-muted);">' + escapeHtml(formatLeadDate(l.date, l.leadSource)) + '</span>' +
+                    '<span style="font-size:10px;color:var(--text-muted);">' + escapeHtml(formatLeadDate(l.date)) + '</span>' +
                     '<span style="font-size:10px;color:var(--text-muted);">' + escapeHtml(l.leadSource || '') + '</span>' +
                     '<span style="font-size:10px;color:var(--text-muted);">' + escapeHtml(l.city || '') + '</span>' +
                 '</div>' +
@@ -2465,7 +2465,7 @@
       var rowKey = l._rowKey || l.leadId;
       var k = escapeHtml(rowKey);
       return '<div class="lead-card">' +
-        '<div class="lead-card-head"><div><div class="lead-card-id">' + escapeHtml(l.leadId) + ' · ' + escapeHtml(formatLeadDate(l.date, l.leadSource)) + '</div>' +
+        '<div class="lead-card-head"><div><div class="lead-card-id">' + escapeHtml(l.leadId) + ' · ' + escapeHtml(formatLeadDate(l.date)) + '</div>' +
         '<div class="lead-card-name">' + escapeHtml(l.customerName || '—') + '</div></div>' +
         '<span class="badge ' + getStatusBadgeClass(l.leadStatus || 'New') + '">' + escapeHtml(l.leadStatus || 'New') + '</span></div>' +
         '<div class="lead-card-meta"><span>📞 ' + makePhoneLink(l.contact) + '</span><span>📍 ' + escapeHtml(l.city || '—') + '</span>' + (l.email ? '<span>✉ ' + escapeHtml(l.email) + '</span>' : '') + '<span>' +'<span>🏷 ' + escapeHtml(l.leadSource || '—') + '</span><span>👤 ' + escapeHtml(l.assignedName || 'Unassigned') + '</span></div>' +
@@ -2600,7 +2600,7 @@
         window.__leadCache[rowKey] = l;
         return '<tr>' +
           '<td>' + escapeHtml(l.leadId) + '</td>' +
-          '<td>' + escapeHtml(formatLeadDate(l.date, l.leadSource)) + '</td>' +
+          '<td>' + escapeHtml(formatLeadDate(l.date)) + '</td>' +
           '<td>' + escapeHtml(l.customerName || '—') + '</td>' +
           '<td>' + phoneHtml + '</td>' +
           '<td>' + (l.email ? '<a href="mailto:' + escapeHtml(l.email) + '" style="color:var(--primary);">' + escapeHtml(l.email) + '</a>' : '—') + '</td>' +
@@ -2931,7 +2931,7 @@
       '<div class="lead-detail-field"><strong>Contact</strong><div class="value-text">' + phoneHtml + '</div></div>' +
       '<div class="lead-detail-field"><strong>Email</strong><div class="value-text">' + (l.email ? '<a href="mailto:' + escapeHtml(l.email) + '">' + escapeHtml(l.email) + '</a>' : '—') + '</div></div>' +
       '<div class="lead-detail-field"><strong>City</strong><div class="value-text">' + escapeHtml(l.city || '—') + '</div></div>' +
-      '<div class="lead-detail-field"><strong>Date</strong><div class="value-text">' + escapeHtml(formatLeadDate(l.date, l.leadSource)) + '</div></div>' +
+      '<div class="lead-detail-field"><strong>Date</strong><div class="value-text">' + escapeHtml(formatLeadDate(l.date)) + '</div></div>' +
       '<div class="lead-detail-section-title"><div>Requirements</div></div>' +
       '<div class="lead-detail-field" style="grid-column:1/3;"><strong>Client Requirement</strong><div class="value-text">' + escapeHtml(l.clientRequirement || '—') + '</div></div>' +
       '<div class="lead-detail-field" style="grid-column:1/3;"><strong>Detail Requirements</strong><div class="value-text">' + escapeHtml(l.detailRequirements || '—') + '</div></div>' +
