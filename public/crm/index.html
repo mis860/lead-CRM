@@ -3415,31 +3415,11 @@
           return;
         }
         toast('Quotation generated successfully!', 'success');
-        var followPayload = STATE.pendingFollowUpPayload || {};
-        followPayload.leadId = p.leadId;
-        followPayload.customerName = p.customerName;
-        followPayload.leadStatus = 'Hot Lead';
-        followPayload.followDate = followPayload.followDate || getToday();
-        followPayload.followTime = followPayload.followTime || getNow();
-        followPayload.remark = (followPayload.remark || '') + (followPayload.remark ? ' | ' : '') + 'Quotation PDF: ' + res.pdfUrl;
-        followPayload.nextFollowDate = followPayload.nextFollowDate || '';
-        followPayload.nextFollowTime = followPayload.nextFollowTime || '';
-        google.script.run
-          .withSuccessHandler(function(fres) {
-            if (fres && fres.success) toast('Follow-up saved with Hot Lead status.', 'success');
-            window.open(res.pdfUrl, '_blank');
-            document.getElementById('quotationModal').style.display = 'none';
-            STATE.pendingFollowUpPayload = null;
-            navigate(STATE.page, true);
-          })
-          .withFailureHandler(function(err) {
-            window.open(res.pdfUrl, '_blank');
-            document.getElementById('quotationModal').style.display = 'none';
-            STATE.pendingFollowUpPayload = null;
-            navigate(STATE.page, true);
-            console.error('Follow-up save after quotation failed:', err);
-          })
-          .saveFollowUp(STATE.token, followPayload);
+        // The server saves the quotation and its Hot Lead follow-up atomically.
+        window.open(res.pdfUrl, '_blank');
+        document.getElementById('quotationModal').style.display = 'none';
+        STATE.pendingFollowUpPayload = null;
+        navigate(STATE.page, true);
       })
       .withFailureHandler(function(err) {
         btn.disabled = false; btn.innerHTML = originalText;
