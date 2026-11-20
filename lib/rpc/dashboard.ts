@@ -83,13 +83,16 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
     else if (fc === 'followed') followedUpLeads++;
     else noFollowupScheduled++;
 
+    // Hide retired/removed names from Employee-wise Overview without changing their lead records.
     const empName = l.assignedName || 'Unassigned';
-    if (!employeeData[empName]) employeeData[empName] = { total: 0, pending: 0, pendingFollowups: 0, converted: 0, fulfilled: 0 };
-    employeeData[empName].total++;
-    if (PENDING_STATUSES.includes(status)) employeeData[empName].pending++;
-    if (status === 'Converted') employeeData[empName].converted++;
-    if (status === 'Fulfilled') employeeData[empName].fulfilled++;
-    if (fc === 'overdue' || fc === 'today') employeeData[empName].pendingFollowups++;
+    if (!['anand kumar', 'manvi gaur'].includes(empName.trim().toLowerCase())) {
+      if (!employeeData[empName]) employeeData[empName] = { total: 0, pending: 0, pendingFollowups: 0, converted: 0, fulfilled: 0 };
+      employeeData[empName].total++;
+      if (PENDING_STATUSES.includes(status)) employeeData[empName].pending++;
+      if (status === 'Converted') employeeData[empName].converted++;
+      if (status === 'Fulfilled') employeeData[empName].fulfilled++;
+      if (fc === 'overdue' || fc === 'today') employeeData[empName].pendingFollowups++;
+    }
 
     if (!sourcePerformance[src]) sourcePerformance[src] = { total: 0, converted: 0 };
     sourcePerformance[src].total++;
@@ -97,8 +100,14 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
   }
 
   const statusDistribution = Object.keys(statusDist).map((k) => ({ status: k, count: statusDist[k] })).sort((a, b) => b.count - a.count);
-  const actionOrder = ACTION_REQUIRED_STATUSES;
-  const actionRequired = actionOrder.map((st) => actionRequiredMap[st]).filter(Boolean);
+  // Highest-volume action-required statuses first; within each status, show the nearest/overdue follow-ups first.
+  const actionRequired = ACTION_REQUIRED_STATUSES.map((st) => actionRequiredMap[st]).filter(Boolean)
+    .map((group) => ({ ...group, leads: [...group.leads].sort((a: any, b: any) => {
+      const ad = a.nextFollowUpDate || '9999-12-31';
+      const bd = b.nextFollowUpDate || '9999-12-31';
+      return ad.localeCompare(bd) || String(a.date || '').localeCompare(String(b.date || ''));
+    }) }))
+    .sort((a, b) => b.count - a.count);
   const trend: { date: string; count: number }[] = [];
   for (let i = 13; i >= 0; i--) { const k = shiftDateKey(i); trend.push({ date: k, count: byDate[k] || 0 }); }
   const topSources = Object.keys(bySource).map((k) => ({ source: k, count: bySource[k] })).sort((a, b) => b.count - a.count);
