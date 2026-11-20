@@ -29,8 +29,6 @@ export async function handleGetLeadsWithFollowUpData(req: NextRequest, args: any
   let q = sb.from('lead_current').select('*', { count: 'exact' });
   const scoped = scopeOr(s);
   if (scoped) q = q.or(scoped);
-  // Show only leads dated on/after 1 Aug 2026; earlier records remain stored.
-  q = q.gte('lead_date', '2026-08-01');
   if (o.fromDate) q = q.gte('lead_date', o.fromDate);
   if (o.toDate) q = q.lte('lead_date', o.toDate);
   const search = String(o.search || '').trim().toLowerCase();
