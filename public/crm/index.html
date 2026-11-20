@@ -1930,7 +1930,10 @@
       if (l.leadStatus === 'Converted') sources[src].converted++;
     });
     var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;">';
-    var sorted = Object.keys(sources).sort();
+    // Exclude Facebook and Instagram only from the dashboard Source-wise Performance panel.
+    var sorted = Object.keys(sources).filter(function(src) {
+      return !/(facebook|instagram|(^|[^a-z])(fb|insta)([^a-z]|$))/i.test(String(src || ''));
+    }).sort();
     sorted.forEach(function(src) {
       var s = sources[src];
       var rate = s.total > 0 ? ((s.converted / s.total) * 100).toFixed(1) : 0;
