@@ -229,11 +229,14 @@ export async function handleSaveFollowUp(req: NextRequest, args: any[]) {
     follow_time: p.followTime || '',
     remark: p.remark || '',
     lead_status: status,
-    next_follow_date: p.nextFollowDate || '',
+    next_follow_date: p.nextFollowDate || null,
     next_follow_time: p.nextFollowTime || '',
-    created_by: s.email,
+    created_by: s.userId,
   });
-  if (error) return { success: false, code: 'SERVER_ERROR', message: 'Could not save follow-up.' };
+  if (error) {
+    console.error('save_follow_up insert failed:', error.message, error.code);
+    return { success: false, code: 'SERVER_ERROR', message: 'Could not save follow-up. Please check the date and try again.' };
+  }
   await sb.from('leads').update({ updated_at: new Date().toISOString() }).eq('lead_id', p.leadId);
   await enqueueSheetSync('follow_ups', p.leadId + ':' + p.followDate + ':' + (p.followTime || ''), {
     leadId: p.leadId, followDate: p.followDate, followTime: p.followTime || '', remark: p.remark || '',
