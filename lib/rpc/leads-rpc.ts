@@ -19,7 +19,7 @@ function scopeOr(s: Session): string | null {
   const email = s.email.toLowerCase();
   const role = (s.role || '').toLowerCase();
   if (role === 'admin' || email === SPECIAL_EMAILS.director || email === SPECIAL_EMAILS.purchase) return null;
-  if (email === SPECIAL_EMAILS.corporatesales) return 'assigned_name.eq.Indu Hada';
+  if (email === SPECIAL_EMAILS.corporatesales || email === 'info@panacheevents.in') return 'assigned_name.eq.Indu Hada';
   const owners = visibleOwnerNames(s).map((o) => o.toLowerCase());
   if (!owners.length) return 'assigned_name.eq.__NONE__';
   return owners.map((o) => `assigned_name.ilike.${o}`).join(',');
