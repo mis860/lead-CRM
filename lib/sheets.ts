@@ -159,22 +159,59 @@ export async function batchUpdateValues(data: { range: string; values: any[][] }
   });
 }
 
-/** Apply an ISO date display format to the date column (B) of named lead tabs. */
+/** Normalize text dates to real Sheets dates, then apply YYYY-MM-DD display format. */
 export async function formatLeadDateColumns(sheetNames: string[]) {
   const meta = await sheetsCall('?fields=' + encodeURIComponent('sheets(properties(sheetId,title))'), {});
   const tabs = meta.sheets || [];
-  const requests = sheetNames.map((name) => {
+  const requests: any[] = [];
+  const summary: any[] = [];
+
+  for (const name of sheetNames) {
     const sheet = tabs.find((x: any) => x.properties?.title === name);
     if (!sheet) throw new Error('Google Sheet tab not found: ' + name);
-    return {
+    const sheetId = sheet.properties.sheetId;
+    const values = await sheetsCall('/values/' + encodeURIComponent(q(name) + '!B2:B') + '?valueRenderOption=UNFORMATTED_VALUE', {});
+    const dates: any[] = values.values || [];
+    let converted = 0;
+
+    for (let i = 0; i < dates.length; i++) {
+      const value = dates[i]?.[0];
+      if (value === undefined || value === null || value === '') continue;
+      if (typeof value === 'number') continue;
+      const raw = String(value).trim();
+      let year = 0, month = 0, day = 0;
+      let m = raw.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})$/);
+      if (m) { year = Number(m[1]); month = Number(m[2]); day = Number(m[3]); }
+      else {
+        m = raw.match(/^(\\d{1,2})[\\/. -](\\d{1,2})[\\/. -](\\d{4})$/);
+        if (m) { month = Number(m[1]); day = Number(m[2]); year = Number(m[3]); }
+      }
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (!year || !month || !day || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) continue;
+      const serial = Math.floor(date.getTime() / 86400000) + 25569;
+      requests.push({
+        updateCells: {
+          range: { sheetId, startRowIndex: i + 1, endRowIndex: i + 2, startColumnIndex: 1, endColumnIndex: 2 },
+          rows: [{ values: [{ userEnteredValue: { numberValue: serial } }] }],
+          fields: 'userEnteredValue',
+        },
+      });
+      converted++;
+    }
+    requests.push({
       repeatCell: {
-        range: { sheetId: sheet.properties.sheetId, startRowIndex: 1, startColumnIndex: 1, endColumnIndex: 2 },
+        range: { sheetId, startRowIndex: 1, startColumnIndex: 1, endColumnIndex: 2 },
         cell: { userEnteredFormat: { numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } } },
         fields: 'userEnteredFormat.numberFormat',
       },
-    };
-  });
-  return sheetsCall(':batchUpdate', { method: 'POST', body: JSON.stringify({ requests }) });
+    });
+    summary.push({ tab: name, rowsScanned: dates.length, textDatesConverted: converted });
+  }
+
+  const result = requests.length
+    ? await sheetsCall(':batchUpdate', { method: 'POST', body: JSON.stringify({ requests }) })
+    : {};
+  return { summary, result };
 }
 
 /** 1-based sheet row number whose column A equals `key` (row 1 is the header), or null. */
