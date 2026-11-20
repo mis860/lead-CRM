@@ -159,6 +159,24 @@ export async function batchUpdateValues(data: { range: string; values: any[][] }
   });
 }
 
+/** Apply an ISO date display format to the date column (B) of named lead tabs. */
+export async function formatLeadDateColumns(sheetNames: string[]) {
+  const meta = await sheetsCall('?fields=' + encodeURIComponent('sheets(properties(sheetId,title))'), {});
+  const tabs = meta.sheets || [];
+  const requests = sheetNames.map((name) => {
+    const sheet = tabs.find((x: any) => x.properties?.title === name);
+    if (!sheet) throw new Error('Google Sheet tab not found: ' + name);
+    return {
+      repeatCell: {
+        range: { sheetId: sheet.properties.sheetId, startRowIndex: 1, startColumnIndex: 1, endColumnIndex: 2 },
+        cell: { userEnteredFormat: { numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } } },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    };
+  });
+  return sheetsCall(':batchUpdate', { method: 'POST', body: JSON.stringify({ requests }) });
+}
+
 /** 1-based sheet row number whose column A equals `key` (row 1 is the header), or null. */
 export async function findRowByColA(sheetName: string, key: string): Promise<number | null> {
   const res = await sheetsCall('/values/' + encodeURIComponent(q(sheetName) + '!A1:A200000') + '?majorDimension=COLUMNS', {});
