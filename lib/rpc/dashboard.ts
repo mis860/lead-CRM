@@ -43,7 +43,9 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
 
   for (const raw of leads || []) {
     const l: any = toClientLead(raw);
-    const src = l.leadSource || 'Unknown';
+    const rawSource = String(l.leadSource || '').trim();
+    // Treat source spelling/case variants as one reporting category.
+    const src = /^india\s*-?\s*mart$/i.test(rawSource) ? 'INDIAMART' : (rawSource || 'Unknown');
     bySource[src] = (bySource[src] || 0) + 1;
     if (l.assignedName && l.assignedName.trim() !== '') byAssignee[l.assignedName] = (byAssignee[l.assignedName] || 0) + 1;
     if (l.date) byDate[l.date] = (byDate[l.date] || 0) + 1;
@@ -118,7 +120,7 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
     success: true,
     totals: {
       totalLeads,
-      indiamart: (leads || []).filter((l: any) => l.lead_source === 'INDIAMART').length,
+      indiamart: bySource['INDIAMART'] || 0,
       fbInsta: bySource['FB & INSTA'] || 0,
       corpFb: bySource['Corp FB'] || 0,
       todayCount, yesterdayCount, weekCount,
