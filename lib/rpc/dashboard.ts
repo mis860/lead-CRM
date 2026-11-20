@@ -58,14 +58,14 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
     if (!statusBySource[src]) statusBySource[src] = {};
     if (status && !['', 'null', 'undefined'].includes(status)) {
       let displayStatus = status;
-      if (status === 'New') displayStatus = l.date && l.date < '2026-09-01' ? 'Old Lead' : 'New Lead';
+      if (status === 'New') displayStatus = l.date && l.date < today ? 'Old Lead' : 'New Lead';
       statusBySource[src][displayStatus] = (statusBySource[src][displayStatus] || 0) + 1;
     }
     if (HOT_STATUSES.includes(status)) hotLeads++;
     if (status === 'Shared Quotation') sharedQuotationLeads++;
     if (POTENTIAL_STATUSES.includes(status)) potentialLeads++;
     if (status === 'Converted') convertedLeads++;
-    if (l.date && l.date <= pendingThreshold && PENDING_STATUSES.includes(status)) pendingLeads++;
+    if (l.nextFollowUpDate && l.nextFollowUpDate > pendingThreshold && PENDING_STATUSES.includes(status)) pendingLeads++;
     if (WASTE_STATUSES.includes(status)) {
       wasteLeads++;
       const wc = getWasteSource(l.leadSource);
