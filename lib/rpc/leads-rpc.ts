@@ -1,11 +1,19 @@
 import { NextRequest } from 'next/server';
 import { supabaseAdmin, fetchAll } from '../supabase';
-import { requireSession, Session, AUTH_EXPIRED, visibleOwnerNames } from '../auth';
+import { requireSession, Session, AUTH_EXPIRED, visibleOwnerNames, isManagementSession } from '../auth';
 import { SPECIAL_EMAILS, VALID_STATUSES, audit } from '../config';
 import { todayKey } from '../ist';
 import { classifyFollow } from '../follow-class';
 import { toClientLead, normalizeLeadKey, safeStatus } from './leads';
 import { enqueueSheetSync } from '../outbox';
+
+async function canAccessLead(sb: any, s: Session, leadId: string, managementOverride = false): Promise<boolean> {
+  let q = sb.from('lead_current').select('lead_id').eq('lead_id', String(leadId || '').trim());
+  const scoped = managementOverride && isManagementSession(s) ? null : scopeOr(s);
+  if (scoped) q = q.or(scoped);
+  const { data, error } = await q.maybeSingle();
+  return !error && !!data;
+}
 
 function scopeOr(s: Session): string | null {
   const email = s.email.toLowerCase();
@@ -199,19 +207,22 @@ export async function handleSaveFollowUp(req: NextRequest, args: any[]) {
     return { success: false, code: 'VALIDATION_ERROR', message: 'Lead ID and Follow Date are required.' };
   }
   const status = safeStatus(p.leadStatus);
+  const sb = supabaseAdmin();
+  if (!(await canAccessLead(sb, s, String(p.leadId)))) {
+    return { success: false, code: 'ACCESS_DENIED', message: 'You do not have access to this lead.' };
+  }
 
   // Configurable rule: 'Share Quotation' status allowed only for leads assigned to
   // the configured assignee (app_config.share_quotation_allowed_assignee, default 'indu hada').
   if (status === 'Share Quotation') {
     const allowed = String(await (await import('../config')).getConfig('share_quotation_allowed_assignee') || 'indu hada');
-    const sb0 = supabaseAdmin();
+    const sb0 = sb;
     const { data: lead } = await sb0.from('leads').select('assigned_name').eq('lead_id', p.leadId).maybeSingle();
     if (!lead || (lead.assigned_name || '').toString().trim().toLowerCase() !== allowed) {
       return { success: false, code: 'ACCESS_DENIED', message: 'Share Quotation status is allowed only for leads assigned to Indu Hada.' };
     }
   }
 
-  const sb = supabaseAdmin();
   const { error } = await sb.from('follow_ups').insert({
     lead_id: p.leadId,
     follow_date: p.followDate,
@@ -240,6 +251,9 @@ export async function handleGetFollowHistory(req: NextRequest, args: any[]) {
   const leadId = args[0];
   if (!leadId) return { success: false, code: 'VALIDATION_ERROR', message: 'Lead ID is required.' };
   const sb = supabaseAdmin();
+  if (!(await canAccessLead(sb, s, String(leadId)))) {
+    return { success: false, code: 'ACCESS_DENIED', message: 'You do not have access to this lead.' };
+  }
   const { data, error } = await sb.from('follow_ups')
     .select('lead_id, follow_date, follow_time, remark, lead_status, next_follow_date, next_follow_time, created_at')
     .eq('lead_id', leadId)
@@ -280,6 +294,7 @@ export async function handleUpdateAssignedUser(req: NextRequest, args: any[]) {
   const s = await requireSession(req);
   if (!s) return AUTH_EXPIRED;
   const p = args[0] || {};
+  if (!isManagementSession(s)) return { success: false, code: 'ACCESS_DENIED', message: 'Only authorized management can reassign leads.' };
   if (!p.leadId || !p.assignedName) {
     return { success: false, code: 'VALIDATION_ERROR', message: 'Lead ID and Assigned Name are required.' };
   }
@@ -310,6 +325,7 @@ export async function handleUpdateLeadStatus(req: NextRequest, args: any[]) {
   if (VALID_STATUSES.indexOf(p.status) === -1) return { success: false, code: 'VALIDATION_ERROR', message: 'Invalid status value.' };
   const sb = supabaseAdmin();
   const leadKey = String(p.leadId).trim();
+  if (!(await canAccessLead(sb, s, leadKey))) return { success: false, code: 'ACCESS_DENIED', message: 'You do not have access to this lead.' };
   const { data: lead } = await sb.from('leads').select('id, base_status').eq('lead_id', leadKey).maybeSingle();
   if (!lead) return { success: false, code: 'NOT_FOUND', message: 'Lead not found.' };
   const { error } = await sb.from('leads').update({ base_status: p.status, updated_at: new Date().toISOString() }).eq('id', lead.id);
