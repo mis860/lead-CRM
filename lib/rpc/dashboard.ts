@@ -15,6 +15,8 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
   const { data: leads, error } = await fetchAll(() => {
     let q = sb.from('lead_current').select('*');
     if (scoped) q = q.or(scoped);
+    // Dashboard only includes leads dated before 1 Aug 2026; no records are deleted.
+    q = q.lt('lead_date', '2026-08-01');
     return q;
   });
   if (error) return { success: false, code: 'SERVER_ERROR', message: 'Failed to load dashboard data.' };
