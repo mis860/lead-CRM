@@ -73,12 +73,12 @@ export function toClientLead(l: any, sourceKey?: string): any {
     detailRequirements: l.detail_requirements || '',
     leadSource: l.lead_source || '',
     assignedName: l.assigned_name || '',
-    lastFollowUpDecision: l.last_follow_up_decision || '',
-    nextFollowUpDate: l.next_follow_up_date || '',
-    nextFollowUpTime: l.next_follow_up_time || '',
-    leadStatus: l.lead_status || 'New',
-    followDate: l.follow_date || '',
-    followTime: l.follow_time || '',
+    lastFollowUpDecision: l.last_remark || '',
+    nextFollowUpDate: l.next_follow_date || '',
+    nextFollowUpTime: l.next_follow_time || '',
+    leadStatus: l.current_status || l.base_status || 'New',
+    followDate: l.last_follow_date || '',
+    followTime: l.last_follow_time || '',
     _sourceKey: l.source_key || sourceKey || '',
   };
 }
