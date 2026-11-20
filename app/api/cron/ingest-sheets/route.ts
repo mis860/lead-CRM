@@ -10,12 +10,11 @@ export const maxDuration = 60;
  *  overwrites DB-side edits (assignment/status) — sheet is source of truth only
  *  for NEW rows. Source-tab column maps lifted from Code.gs LEAD_SOURCES. */
 const SOURCES = [
+  // Google Sheets sync scope: Leads!A2:Q and Corp FB!A2:K.
+  // The separate legacy "Lead" tab and "FB & INSTA" tab are intentionally excluded.
   { key: 'INDIAMART', sheetName: 'Leads', endCol: 'Q',
     map: { leadId: 0, date: 1, customerName: 2, contact: 4, email: 13, city: 10, clientRequirement: 7, detailRequirements: 8, assignedName: 14, status: 16 },
     forceSource: 'INDIAMART', fallbackSource: 'INDIAMART' },
-  { key: 'FB_INSTA', sheetName: 'FB & INSTA', endCol: 'K',
-    map: { leadId: 0, date: 1, customerName: 2, contact: 3, city: 4, clientRequirement: 5, detailRequirements: 6, leadSource: 8, assignedName: 9, status: 10 },
-    forceSource: null, fallbackSource: 'Facebook' },
   { key: 'CORP_FB', sheetName: 'Corp FB', endCol: 'K',
     map: { leadId: 0, date: 1, customerName: 2, contact: 5, city: 4, clientRequirement: 6, detailRequirements: 7, leadSource: 8, assignedName: 9, status: 10 },
     forceSource: null, fallbackSource: 'Corp FB' },
@@ -508,7 +507,9 @@ export async function GET(req: NextRequest) {
     await sb.from('sheet_sync_log').insert({ direction: 'sheet->db', table_name: FU_SHEET, ok: false, error: String(e?.message || e).substring(0, 500) });
     summary.sources.push({ source: FU_SHEET, error: String(e?.message || e) });
   }
-  for (const fn of [removeDeleted, refreshExistingLeads, refreshFollowUps, syncChecklist, syncDelegation, syncQuotations]) {
+  // Do not delete CRM rows merely because they are absent from a sheet range.
+  // The configured ranges are ingestion/update sources; destructive deletion is intentionally disabled.
+  for (const fn of [refreshExistingLeads, refreshFollowUps, syncChecklist, syncDelegation, syncQuotations]) {
     try { summary.sources.push(await fn(sb, sheets)); }
     catch (e: any) { summary.sources.push({ source: fn.name, error: String(e?.message || e).slice(0, 300) }); }
   }
