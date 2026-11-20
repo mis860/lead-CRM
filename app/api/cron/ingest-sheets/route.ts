@@ -509,7 +509,7 @@ export async function GET(req: NextRequest) {
   }
   // Do not delete CRM rows merely because they are absent from a sheet range.
   // The configured ranges are ingestion/update sources; destructive deletion is intentionally disabled.
-  for (const fn of [refreshExistingLeads, refreshFollowUps, syncChecklist, syncDelegation, syncQuotations]) {
+  for (const fn of [refreshExistingLeads, refreshFollowUps]) {
     try { summary.sources.push(await fn(sb, sheets)); }
     catch (e: any) { summary.sources.push({ source: fn.name, error: String(e?.message || e).slice(0, 300) }); }
   }
