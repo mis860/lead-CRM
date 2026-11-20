@@ -458,44 +458,6 @@ export async function GET(req: NextRequest) {
       const rows = await sheets.readRange(src.sheetName, a1);
       let inserted = 0, skipped = 0, newLast = lastRow;
       const insertErrors: string[] = [];
-
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        newLast = lastRow + i; // will advance even for blank rows
-        if (!row || row.every((c) => c === '' || c === null || c === undefined)) { skipped++; continue; }
-        const m = src.map;
-        const leadId = String(row[m.leadId] ?? '').trim();
-        if (!leadId) { skipped++; continue; }
-        const dateRaw = row[m.date];
-        const leadDate = typeof dateRaw === 'number'
-          ? new Date(Math.round((dateRaw - 25569) * 86400 * 1000)).toISOString().slice(0, 10)
-          : fmtDate(dateRaw);
-
-        // upsert by (source_key, lead_id) — new rows only; DB edits win
-        const { data: existing } = await sb.from('leads').select('id')
-          .eq('lead_id', leadId).eq('source_key', src.key).maybeSingle();
-        if (existing) { skipped++; continue; }
-        const status = String(row[m.status] ?? '').trim() || 'New';
-        let leadSource = src.forceSource || String(row[m.leadSource] ?? '').trim() || src.fallbackSource;
-        const { error } = await sb.from('leads').insert({
-          row_key: src.key + '-' + leadId,
-          lead_id: leadId, source_key: src.key,
-          lead_date: leadDate || null,
-          customer_name: String(row[m.customerName] ?? '').trim(),
-          contact: String(row[m.contact] ?? '').trim(),
-          email: m.email === undefined ? '' : String(row[m.email] ?? '').trim(),
-          city: String(row[m.city] ?? '').trim(),
-          client_requirement: String(row[m.clientRequirement] ?? '').trim(),
-          detail_requirements: String(row[m.detailRequirements] ?? '').trim(),
-          lead_source: leadSource,
-          assigned_name: String(row[m.assignedName] ?? '').trim(),
-          base_status: status,
-        });
-        if (error) { skipped++; insertErrors.push(leadId + ': ' + error.message.slice(0, 120)); continue; }
-        inserted++;
-      }
-      let inserted = 0, skipped = 0, newLast = lastRow;
-      const insertErrors: string[] = [];
       const candidates: any[] = [];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
