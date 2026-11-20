@@ -103,7 +103,7 @@ async function ingestFollowUps(sb: any, sheets: any) {
       lead_status: String(r[4] ?? '').trim() || 'New',
       next_follow_date: normDate(r[5]),
       next_follow_time: normTime(r[6]),
-      created_by: 'sheet-import',
+      
     };
     const ts = normTimestamp(r[7]);
     if (ts) rec.created_at = ts;
@@ -494,7 +494,7 @@ export async function GET(req: NextRequest) {
         const fresh = candidates.filter((x) => !have.has(String(x.lead_id)));
         skipped += candidates.length - fresh.length;
         if (fresh.length) {
-          const { error } = await sb.from('leads').upsert(fresh, { onConflict: 'source_key,lead_id', ignoreDuplicates: true });
+          const { error } = await sb.from('leads').upsert(fresh, { onConflict: 'row_key', ignoreDuplicates: true });
           if (error) throw new Error('lead batch insert failed: ' + error.message);
           inserted = fresh.length;
         }
