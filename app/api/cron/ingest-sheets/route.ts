@@ -48,15 +48,19 @@ const pad2 = (n: number) => (n < 10 ? '0' : '') + n;
 
 function serialToUtc(n: number): Date { return new Date(Math.round((n - 25569) * 86400 * 1000)); }
 
-function normDate(v: any): string {
-  if (v === null || v === undefined || v === '') return '';
-  if (typeof v === 'number') return serialToUtc(v).toISOString().slice(0, 10);
+function normDate(v: any): string | null {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v) || v <= 0) return null;
+    return serialToUtc(v).toISOString().slice(0, 10);
+  }
   const s = String(v).trim();
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) return m[1] + '-' + pad2(+m[2]) + '-' + pad2(+m[3]);
   m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/); // dd/mm/yyyy (India)
   if (m) return m[3] + '-' + pad2(+m[2]) + '-' + pad2(+m[1]);
-  return s;
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
 }
 
 function normTime(v: any): string {
