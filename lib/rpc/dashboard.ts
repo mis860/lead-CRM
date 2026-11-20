@@ -99,6 +99,10 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
     if (status === 'Converted') sourcePerformance[src].converted++;
   }
 
+  // Keep Facebook/Instagram out of the Lead Status Overview by Lead Source only.
+  const leadStatusBySource = Object.fromEntries(Object.entries(statusBySource).filter(([source]) =>
+    !/(facebook|instagram|(^|[^a-z])(fb|insta)([^a-z]|$))/i.test(source)
+  ));
   const statusDistribution = Object.keys(statusDist).map((k) => ({ status: k, count: statusDist[k] })).sort((a, b) => b.count - a.count);
   // Highest-volume action-required statuses first; within each status, show the nearest/overdue follow-ups first.
   const actionRequired = ACTION_REQUIRED_STATUSES.map((st) => actionRequiredMap[st]).filter(Boolean)
@@ -139,7 +143,7 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
     sourceDistribution: topSources,
     sourceTodayVsYesterday,
     assigneeDistribution: Object.keys(byAssignee).filter((k) => k && k.trim() !== '').map((k) => ({ name: k, count: byAssignee[k] })).sort((a, b) => b.count - a.count),
-    trend, statusDistribution, statusBySource, actionRequired,
+    trend, statusDistribution, statusBySource: leadStatusBySource, actionRequired,
     wasteLeads, wasteBySource, overdueFollowups, todayFollowups, upcomingFollowups, noFollowupScheduled, followedUpLeads,
     pipelineDistribution, statusWidgetsAvailable: true,
     todayLeads, yesterdayLeads, weekLeads,
