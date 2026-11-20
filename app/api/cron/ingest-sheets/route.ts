@@ -31,9 +31,14 @@ function fmtDate(val: any): string {
   if (val === null || val === undefined || val === '') return '';
   if (typeof val === 'number') return (val > 20000 && val < 60000) ? new Date(Math.round((val - 25569) * 86400 * 1000)).toISOString().slice(0, 10) : '';
   const s = String(val).trim();
-  // dd/mm/yyyy (India), dd-mm-yyyy, dd.mm.yyyy, optional time suffix
+  // Google Sheet date strings are MM/DD/YYYY (month first), optionally followed by a time.
   let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
-  if (m) { const dd = +m[1], mm = +m[2]; return (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) ? m[3] + '-' + (mm < 10 ? '0' : '') + mm + '-' + (dd < 10 ? '0' : '') + dd : ''; }
+  if (m) {
+    const mm = +m[1], dd = +m[2], yyyy = +m[3];
+    const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+    if (mm < 1 || mm > 12 || dd < 1 || d.getUTCFullYear() !== yyyy || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return '';
+    return yyyy + '-' + pad2(mm) + '-' + pad2(dd);
+  }
   m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
   const d = new Date(s);
@@ -57,8 +62,14 @@ function normDate(v: any): string | null {
   const s = String(v).trim();
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) return m[1] + '-' + pad2(+m[2]) + '-' + pad2(+m[3]);
-  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/); // dd/mm/yyyy (India)
-  if (m) return m[3] + '-' + pad2(+m[2]) + '-' + pad2(+m[1]);
+  // Google Sheet date strings are MM/DD/YYYY (month first).
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+  if (m) {
+    const mm = +m[1], dd = +m[2], yyyy = +m[3];
+    const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+    if (mm < 1 || mm > 12 || dd < 1 || d.getUTCFullYear() !== yyyy || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return null;
+    return yyyy + '-' + pad2(mm) + '-' + pad2(dd);
+  }
   const parsed = new Date(s);
   return isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
 }
