@@ -2551,20 +2551,25 @@
     });
   }
 
+  var leadDataRequestSeq = 0;
   function loadLeadData() {
     var body = document.getElementById('leadTable_body');
+    if (!body) return;
+    var requestId = ++leadDataRequestSeq;
     body.innerHTML = skeletonRows(LEAD_COLUMNS.length + 1, 6);
     var options = JSON.parse(JSON.stringify(STATE.leadState));
     google.script.run
       .withSuccessHandler(function (res) {
-        if (!res.success) {
+        if (requestId !== leadDataRequestSeq) return;
+        if (!res || !res.success) {
           if (isSessionExpiredError(res)) { handleSessionExpired(); return; }
-          body.innerHTML = '<tr><td colspan="' + (LEAD_COLUMNS.length + 1) + '">' + errorState(res.message || 'Could not load leads.', loadLeadData) + '</td></tr>';
+          body.innerHTML = '<tr><td colspan="' + (LEAD_COLUMNS.length + 1) + '">' + errorState((res && res.message) || 'Could not load leads.', loadLeadData) + '</td></tr>';
           return;
         }
         renderLeadModuleInternal(res);
       })
       .withFailureHandler(function (err) {
+        if (requestId !== leadDataRequestSeq) return;
         if (isNetworkError(err)) body.innerHTML = '<tr><td colspan="' + (LEAD_COLUMNS.length + 1) + '">' + errorState('Network error. Please try again.', loadLeadData) + '</td></tr>';
         else {
           body.innerHTML = '<tr><td colspan="' + (LEAD_COLUMNS.length + 1) + '">' + errorState('Server error loading leads.', loadLeadData) + '</td></tr>';
