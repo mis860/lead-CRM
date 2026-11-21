@@ -2575,14 +2575,22 @@
   }
 
   function populateLeadFilterSelects(filterOptions) {
+    filterOptions = filterOptions || {};
     fillSelect('leadTable_city', filterOptions.cities || [], 'All Cities');
     fillSelect('leadTable_source', filterOptions.sources || [], 'All Sources');
     fillSelect('leadTable_assignee', filterOptions.assignees || [], 'All Assignees');
     fillSelect('leadTable_status', filterOptions.statuses || [], 'All Status');
-    if (STATE.leadState.leadStatus) {
-      var statusSelect = document.getElementById('leadTable_status');
-      if (statusSelect) statusSelect.value = STATE.leadState.leadStatus;
-    }
+    var state = STATE.leadState || {};
+    var selections = {
+      leadTable_city: state.city || '',
+      leadTable_source: state.leadSource || '',
+      leadTable_assignee: state.assignedName || '',
+      leadTable_status: state.leadStatus || ''
+    };
+    Object.keys(selections).forEach(function (id) {
+      var select = document.getElementById(id);
+      if (select) select.value = selections[id];
+    });
   }
 
   function renderLeadRowsWithActions(res) {
@@ -2630,11 +2638,11 @@
 
   function fillSelect(id, options, allLabel) {
     var sel = document.getElementById(id);
-    if (!sel || sel.dataset.filled === '1') return;
+    if (!sel) return;
     var current = sel.value;
-    sel.innerHTML = '<option value="">' + allLabel + '</option>' + options.map(function (o) { return '<option value="' + escapeHtml(o) + '">' + escapeHtml(o) + '</option>'; }).join('');
+    var values = Array.isArray(options) ? options : [];
+    sel.innerHTML = '<option value="">' + allLabel + '</option>' + values.map(function (o) { return '<option value="' + escapeHtml(o) + '">' + escapeHtml(o) + '</option>'; }).join('');
     sel.value = current;
-    sel.dataset.filled = '1';
   }
 
   function renderPagination(tableId, total, stateObj, onChange) {
