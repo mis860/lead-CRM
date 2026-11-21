@@ -44,11 +44,11 @@ export async function handleGetLeadsWithFollowUpData(req: NextRequest, args: any
   if (o.city) q = q.eq('city', o.city);
   if (o.leadSource) q = q.eq('lead_source', o.leadSource);
   if (o.assignedName) q = q.eq('assigned_name', o.assignedName);
-  if (o.leadStatus) q = q.eq('lead_status', o.leadStatus);
+  if (o.leadStatus) q = q.eq('current_status', o.leadStatus);
 
   const sortKeyMap: Record<string, string> = {
     date: 'lead_date', customerName: 'customer_name', leadId: 'lead_id',
-    leadStatus: 'lead_status', assignedName: 'assigned_name', city: 'city', leadSource: 'lead_source',
+    leadStatus: 'current_status', assignedName: 'assigned_name', city: 'city', leadSource: 'lead_source',
   };
   const dbSort = sortKeyMap[o.sortKey || 'date'] || 'lead_date';
   q = q.order(dbSort, { ascending: o.sortDir === 'asc', nullsFirst: false }).order('lead_id', { ascending: true });
@@ -60,7 +60,7 @@ export async function handleGetLeadsWithFollowUpData(req: NextRequest, args: any
   // filterOptions computed from the FULL scoped set (like GAS), not just the page.
   const scoped2 = scopeOr(s);
   const { data: fdata } = await fetchAll(() => {
-    let fq = sb.from('lead_current').select('city,lead_source,assigned_name,lead_status');
+    let fq = sb.from('lead_current').select('city,lead_source,assigned_name,current_status');
     if (scoped2) fq = fq.or(scoped2);
     return fq;
   });
@@ -69,7 +69,7 @@ export async function handleGetLeadsWithFollowUpData(req: NextRequest, args: any
     if (l.city) cities[l.city] = true;
     if (l.lead_source) sources[l.lead_source] = true;
     if (l.assigned_name && l.assigned_name.trim() !== '') assignees[l.assigned_name] = true;
-    statuses[l.lead_status || 'New'] = true;
+    statuses[l.current_status || 'New'] = true;
   });
 
   // Latest quotation per lead on this page -> stable link (/api/quotation/<id>) that redirects to a fresh signed PDF URL.
