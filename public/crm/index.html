@@ -288,6 +288,7 @@
     .status-whatsapps { background: #34d399; color: #064e3b; }
     .status-shared-quotation { background: #c4b5fd; color: #4c1d95; }
     .status-vendor { background: #f472b6; color: #831843; }
+    .status-warm-lead { background: #fef3c7; color: #92400e; }
     .status-low-budget { background: #fb923c; color: #7c2d12; }
     .status-hot-lead { background: #ef4444; color: #ffffff; }
     .status-potential { background: #a78bfa; color: #2e1065; }
@@ -974,6 +975,7 @@
           <option value="Low budget">Low budget</option>
           <option value="Hot Lead">Hot Lead</option>
           <option value="Potential Lead">Potential Lead</option>
+          <option value="Warm Lead">Warm Lead</option>
           <option value="Converted">Converted</option>
         </select>
       </div>
@@ -1613,7 +1615,7 @@
       'No requirement': 'status-no-requirement', 'WhatsApps': 'status-whatsapps',
       'Shared Quotation': 'status-shared-quotation', 'Vendor': 'status-vendor',
       'Low budget': 'status-low-budget', 'Hot Lead': 'status-hot-lead',
-      'Potential Lead': 'status-potential', 'Converted': 'status-converted'
+      'Potential Lead': 'status-potential', 'Warm Lead': 'status-warm-lead', 'Converted': 'status-converted'
     };
     return map[status] || 'status-new';
   }
@@ -1624,7 +1626,7 @@
       'Share Quotation': '#8b5cf6', 'Fulfilled': '#34d399', 'Buyer': '#6ee7b7',
       'No requirement': '#fcd34d', 'WhatsApps': '#34d399', 'Shared Quotation': '#c4b5fd',
       'Vendor': '#f472b6', 'Low budget': '#fb923c', 'Hot Lead': '#ef4444',
-      'Potential Lead': '#a78bfa', 'Converted': '#6ee7b7'
+      'Potential Lead': '#a78bfa', 'Warm Lead': '#f59e0b', 'Converted': '#6ee7b7'
     };
     return map[status] || '#6b7280';
   }
@@ -1752,7 +1754,7 @@
   function renderDashboard(forceRefresh) {
     var el = document.getElementById('viewDashboard');
     el.innerHTML =
-      '<div class="kpi-grid" id="kpiGrid">' + kpiSkeleton(9) + '</div>' +
+      '<div class="kpi-grid" id="kpiGrid">' + kpiSkeleton(10) + '</div>' +
       '<div class="panel-grid">' +
         '<div class="panel"><div class="panel-header">' + ICONS.users + '<h3>Employee-wise Overview</h3></div><div id="employeeOverviewList">Loading…</div></div>' +
         '<div class="panel"><div class="panel-header">' + ICONS.bars + '<h3>Source-wise Performance</h3></div><div id="sourcePerformanceList">Loading…</div></div>' +
@@ -1875,6 +1877,12 @@
         '<div class="kpi-card-top"><div class="label">Conversion Rate</div><div class="kpi-icon purple">' + ICONS.bars + '</div></div>' +
         '<div class="value">' + (totals.conversionRate || 0).toFixed(1) + '%</div>' +
         '<div class="kpi-progress"><div style="width:' + Math.min(100, (totals.conversionRate || 0) / 10 * 10) + '%;background:' + KPI_COLORS.purple + ';"></div></div>' +
+        '<div class="kpi-click-hint">↕ Click to view leads</div>' +
+      '</div>' +
+      '<div class="kpi-card clickable" onclick="window.__handleKpiClick(\'Warm Leads\', \'Leads with status Warm Lead\', window.__getLeadsByStatus(\'Warm Lead\'), \'leadStatus\', \'Warm Lead\')">' +
+        '<div class="kpi-card-top"><div class="label">Warm Leads</div><div class="kpi-icon orange">' + ICONS.userPlus + '</div></div>' +
+        '<div class="value">' + (totals.warmLeads || 0) + '</div>' +
+        '<div class="kpi-progress"><div style="width:' + Math.min(100, ((totals.warmLeads || 0) / Math.max(1, totals.totalLeads)) * 100 * 5) + '%;background:' + KPI_COLORS.orange + ';"></div></div>' +
         '<div class="kpi-click-hint">↕ Click to view leads</div>' +
       '</div>' +
       '<div class="kpi-card clickable" onclick="window.__handleKpiClick(\'Pending Leads (Future)\', \'Leads with next follow-up after 31 Aug 2026\', ' + JSON.stringify(pendingLeads) + ', \'pendingLeads\', null)">' +
