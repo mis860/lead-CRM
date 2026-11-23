@@ -23,9 +23,9 @@ async function loadEnriched(s: any): Promise<Enriched[]> {
     city: l.city || '', clientRequirement: l.client_requirement || '',
     detailRequirements: l.detail_requirements || '', leadSource: l.lead_source || '',
     assignedName: l.assigned_name || '', date: l.lead_date || '',
-    leadStatus: l.lead_status || 'New', followDate: l.follow_date || '', followTime: l.follow_time || '',
-    nextFollowUpDate: l.next_follow_up_date || '', nextFollowUpTime: l.next_follow_up_time || '',
-    lastFollowUpDecision: l.last_follow_up_decision || '',
+    leadStatus: l.current_status || l.base_status || 'New', followDate: l.last_follow_date || '', followTime: l.last_follow_time || '',
+    nextFollowUpDate: l.next_follow_date || '', nextFollowUpTime: l.next_follow_time || '',
+    lastFollowUpDecision: l.last_remark || '',
     _rowKey: (l.source_key || 'DB') + '-' + l.lead_id,
   }));
 }
@@ -59,7 +59,7 @@ function applyReportFilters(leads: Enriched[], filters: any, session: any): { le
 function computeDoerMetrics(leads: Enriched[]) {
   const today = todayKey();
   const total = leads.length;
-  let converted = 0, fulfilled = 0, failed = 0, pending = 0, action = 0;
+  let converted = 0, fulfilled = 0, failed = 0, pending = 0, action = 0, warmLeads = 0;
   let dueToday = 0, overdue = 0, upcoming = 0, noFollow = 0, followed = 0;
   const statusDist: Record<string, number> = {};
   const sourceDist: Record<string, number> = {};
@@ -72,6 +72,7 @@ function computeDoerMetrics(leads: Enriched[]) {
     else if (REPORT_FULFILLED.includes(st)) fulfilled++;
     else if (REPORT_FAILED.includes(st)) failed++;
     if (REPORT_PENDING.includes(st)) pending++;
+    if (st === 'Warm Lead') warmLeads++;
     if (REPORT_ACTION.includes(st)) action++;
     const fc = classifyFollow(st, l.nextFollowUpDate, l.followDate, today);
     if (fc === 'overdue') overdue++; else if (fc === 'today') dueToday++; else if (fc === 'upcoming') upcoming++;
@@ -84,7 +85,7 @@ function computeDoerMetrics(leads: Enriched[]) {
   const convRate = total > 0 ? (converted / total) * 100 : 0;
   const fulRate = total > 0 ? (fulfilled / total) * 100 : 0;
   return {
-    totalLeads: total, pendingLeads: pending, convertedLeads: converted,
+    totalLeads: total, pendingLeads: pending, warmLeads, convertedLeads: converted,
     fulfilledLeads: fulfilled, failedLeads: failed, actionRequired: action,
     dueToday, overdue, upcoming, noFollowUp: noFollow, followedUp: followed,
     conversionRate: Math.round(convRate * 100) / 100,
@@ -153,7 +154,7 @@ export async function handleGetAllDoersReport(req: NextRequest, args: any[]) {
     const rows = Object.keys(groups).map((name) => {
       const m = computeDoerMetrics(groups[name]);
       return {
-        doerName: name, totalLeads: m.totalLeads, pendingLeads: m.pendingLeads,
+        doerName: name, totalLeads: m.totalLeads, pendingLeads: m.pendingLeads, warmLeads: m.warmLeads,
         convertedLeads: m.convertedLeads, fulfilledLeads: m.fulfilledLeads,
         overdue: m.overdue, dueToday: m.dueToday, noFollowUp: m.noFollowUp,
         conversionRate: m.conversionRate, fulfillmentRate: m.fulfillmentRate,
