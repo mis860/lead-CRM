@@ -1882,6 +1882,11 @@
         '<div class="kpi-progress"><div style="width:' + Math.min(100, (totals.conversionRate || 0) / 10 * 10) + '%;background:' + KPI_COLORS.purple + ';"></div></div>' +
         '<div class="kpi-click-hint">↕ Click to view leads</div>' +
       '</div>' +
+      '<div class="kpi-card clickable" onclick="window.__handleKpiClick(\'Not Responding\', \'Leads with status Not Responding\', window.__getLeadsByStatus(\'Not Responding\'), \'leadStatus\', \'Not Responding\')">' +
+        '<div class="kpi-card-top"><div class="label">Not Responding</div><div class="kpi-icon red">' + ICONS.alert + '</div></div>' +
+        '<div class="value">' + ((fullData.allLeads || []).filter(function(l) { return (l.leadStatus || \'New\') === \'Not Responding\'; }).length) + '</div>' +
+        '<div class="kpi-click-hint">↕ Click to view leads</div>' +
+      '</div>' +
       '<div class="kpi-card clickable" onclick="window.__handleKpiClick(\'Warm Leads\', \'Leads with status Warm Lead\', window.__getLeadsByStatus(\'Warm Lead\'), \'leadStatus\', \'Warm Lead\')">' +
         '<div class="kpi-card-top"><div class="label">Warm Leads</div><div class="kpi-icon orange">' + ICONS.userPlus + '</div></div>' +
         '<div class="value">' + (totals.warmLeads || 0) + '</div>' +
@@ -4253,6 +4258,7 @@
       rdKpi('Converted', ov.convertedLeads || 0, okC, RD_ICO.check) +
       rdKpi('Fulfilled', ov.fulfilledLeads || 0, '#0d9488', RD_ICO.star) +
       rdKpi('Pending', ov.pendingLeads || 0, warnC, RD_ICO.clock, '', "window.__rdOpenReportLeads('pending')") +
+      rdKpi('Not Responding', (ov.statusDistribution && ov.statusDistribution['Not Responding']) || 0, dangC, RD_ICO.alert, '', "window.__rdOpenReportLeads('notResponding')") +
       rdKpi('Warm Lead', ov.warmLeads || 0, '#d97706', RD_ICO.star, '', "window.__rdOpenReportLeads('warm')") +
       rdKpi('Overdue', ov.overdue || 0, dangC, RD_ICO.alert, 'follow-ups missed') +
       rdKpi('Due Today', ov.dueToday || 0, '#2563eb', RD_ICO.cal) + '</div>';
@@ -4336,6 +4342,7 @@
     var kpis = '<div class="rd-kpis">' +
       rdKpi('Assigned', m.totalLeads || 0, priC, RD_ICO.users) +
       rdKpi('Pending', m.pendingLeads || 0, warnC, RD_ICO.clock, '', "window.__rdOpenReportLeads('pending')") +
+      rdKpi('Not Responding', (m.statusDistribution && m.statusDistribution['Not Responding']) || 0, dangC, RD_ICO.alert, '', "window.__rdOpenReportLeads('notResponding')") +
       rdKpi('Warm Lead', m.warmLeads || 0, '#d97706', RD_ICO.star, '', "window.__rdOpenReportLeads('warm')") +
       rdKpi('Converted', m.convertedLeads || 0, okC, RD_ICO.check) +
       rdKpi('Fulfilled', m.fulfilledLeads || 0, '#0d9488', RD_ICO.star) +
@@ -4374,6 +4381,7 @@
     var payload = _reportDoerFiltersPayload_();
     if (kind === 'pending') payload.pendingOnly = true;
     else if (kind === 'warm') payload.statusOnly = 'Warm Lead';
+    else if (kind === 'notResponding') payload.statusOnly = 'Not Responding';
     google.script.run
       .withSuccessHandler(function (res) {
         if (!res || res.success === false) {
@@ -4389,9 +4397,10 @@
             lastFollowUpDecision: l.lastRemark || '', _rowKey: l._rowKey || l.leadId
           };
         });
-        if (records.length) showFilteredLeadsModal(kind === 'pending' ? 'Pending Leads (' + records.length + ')' : 'Warm Leads (' + records.length + ')',
-          kind === 'pending' ? 'Pending leads for the selected Doer report filters' : 'Warm Lead status for the selected Doer report filters',
-          records, kind === 'pending' ? 'pendingLeads' : 'leadStatus', kind === 'warm' ? 'Warm Lead' : null);
+        var reportTitle = kind === 'pending' ? 'Pending Leads' : (kind === 'warm' ? 'Warm Leads' : 'Not Responding Leads');
+        var reportSubtitle = kind === 'pending' ? 'Pending leads for the selected Doer report filters' : (kind === 'warm' ? 'Warm Lead status for the selected Doer report filters' : 'Not Responding leads for the selected Doer report filters');
+        if (records.length) showFilteredLeadsModal(reportTitle + ' (' + records.length + ')', reportSubtitle,
+          records, kind === 'pending' ? 'pendingLeads' : 'leadStatus', kind === 'warm' ? 'Warm Lead' : (kind === 'notResponding' ? 'Not Responding' : null));
         else toast('No matching leads found.', 'error');
       })
       .withFailureHandler(function (err) { toast((err && err.message) || 'Could not load report leads.', 'error'); })
