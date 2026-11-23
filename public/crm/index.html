@@ -1888,7 +1888,7 @@
         '<div class="kpi-progress"><div style="width:' + Math.min(100, ((totals.warmLeads || 0) / Math.max(1, totals.totalLeads)) * 100 * 5) + '%;background:' + KPI_COLORS.orange + ';"></div></div>' +
         '<div class="kpi-click-hint">↕ Click to view leads</div>' +
       '</div>' +
-      '<div class="kpi-card clickable" onclick="window.__handleKpiClick(\'Pending Leads (Future)\', \'Leads with next follow-up after 31 Aug 2026\', ' + JSON.stringify(pendingLeads) + ', \'pendingLeads\', null)">' +
+      '<div class="kpi-card clickable" role="button" tabindex="0" onclick="window.__handleKpiClick(\'Pending Leads\', \'Future follow-ups for pending statuses\', null, \'pendingLeads\', null)" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();window.__handleKpiClick(\'Pending Leads\', \'Future follow-ups for pending statuses\', null, \'pendingLeads\', null)}">' +
         '<div class="kpi-card-top"><div class="label">Pending Leads</div><div class="kpi-icon orange">' + ICONS.alert + '</div></div>' +
         '<div class="value">' + pendingCount + '</div>' +
         '<div class="kpi-progress"><div style="width:' + Math.min(100, (pendingCount / Math.max(1, totals.totalLeads)) * 100 * 5) + '%;background:' + KPI_COLORS.orange + ';"></div></div>' +
