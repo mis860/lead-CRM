@@ -35,7 +35,7 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
   const todayLeads: any[] = [], yesterdayLeads: any[] = [], weekLeads: any[] = [];
   const actionRequiredMap: Record<string, { status: string; count: number; leads: any[] }> = {};
   ACTION_REQUIRED_STATUSES.forEach((st) => { actionRequiredMap[st] = { status: st, count: 0, leads: [] }; });
-  let wasteLeads = 0, hotLeads = 0, sharedQuotationLeads = 0, potentialLeads = 0, convertedLeads = 0, pendingLeads = 0;
+  let wasteLeads = 0, hotLeads = 0, sharedQuotationLeads = 0, potentialLeads = 0, warmLeads = 0, convertedLeads = 0, pendingLeads = 0;
   let overdueFollowups = 0, todayFollowups = 0, upcomingFollowups = 0, noFollowupScheduled = 0, followedUpLeads = 0;
   const wasteBySource: Record<string, number> = { INDIAMART: 0, META_CORP: 0, FACEBOOK: 0, INSTAGRAM: 0, UNKNOWN: 0 };
   const employeeData: Record<string, any> = {};
@@ -64,6 +64,7 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
     if (HOT_STATUSES.includes(status)) hotLeads++;
     if (status === 'Shared Quotation') sharedQuotationLeads++;
     if (POTENTIAL_STATUSES.includes(status)) potentialLeads++;
+    if (status === 'Warm Lead') warmLeads++;
     if (status === 'Converted') convertedLeads++;
     if (l.nextFollowUpDate && l.nextFollowUpDate > pendingThreshold && PENDING_STATUSES.includes(status)) pendingLeads++;
     if (WASTE_STATUSES.includes(status)) {
@@ -137,7 +138,7 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
       fbInsta: bySource['FB & INSTA'] || 0,
       corpFb: bySource['Corp FB'] || 0,
       todayCount, yesterdayCount, weekCount,
-      hotLeads, sharedQuotationLeads, potentialLeads, convertedLeads,
+      hotLeads, sharedQuotationLeads, potentialLeads, warmLeads, convertedLeads,
       pendingLeads, wasteLeads, conversionRate,
     },
     sourceDistribution: topSources,
@@ -150,7 +151,7 @@ export async function handleGetDashboardData(req: NextRequest, args: any[]) {
     todayDate: today, yesterdayDate: yesterday, weekStartDate: weekAgoKey,
     allLeads, allLeadsCapped: totalLeads > 5000,
     hotLeads, sharedQuotationLeads, potentialLeads, convertedLeads,
-    pendingLeads, conversionRate,
+    pendingLeads, warmLeads, conversionRate,
     employeeData, sourcePerformance,
   };
 }
