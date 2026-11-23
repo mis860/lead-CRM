@@ -5,7 +5,7 @@ import { ENV } from './env';
 export const VALID_STATUSES = [
   'New', 'Not Responding', 'Not Converted', 'Share Quotation', 'Fulfilled',
   'Buyer', 'No requirement', 'WhatsApps', 'Vendor',
-  'Low budget', 'Hot Lead', 'Potential Lead', 'Converted',
+  'Low budget', 'Hot Lead', 'Potential Lead', 'Warm Lead', 'Converted',
 ];
 
 export const PENDING_STATUSES = ['New', 'Not Responding', 'WhatsApps', 'Share Quotation', 'Hot Lead', 'Potential Lead'];
