@@ -1827,8 +1827,9 @@
     var deltaArrow = delta >= 0 ? '↑' : '↓';
     var pctVsYesterday = totals.yesterdayCount ? Math.round((delta / totals.yesterdayCount) * 100) : (totals.todayCount ? 100 : 0);
     var hotLeadsCount = (totals.hotLeads || 0) + (totals.sharedQuotationLeads || 0);
+    var pendingStatuses = ['New', 'Not Responding', 'WhatsApps', 'Share Quotation', 'Hot Lead', 'Potential Lead'];
     var pendingLeads = [];
-    if (fullData.allLeads) pendingLeads = fullData.allLeads.filter(function(lead) { var nextDate = lead.nextFollowUpDate || ''; return nextDate > '2026-08-31'; });
+    if (fullData.allLeads) pendingLeads = fullData.allLeads.filter(function(lead) { var nextDate = String(lead.nextFollowUpDate || '').slice(0, 10); var status = lead.leadStatus || 'New'; return !!nextDate && nextDate > (fullData.todayDate || '') && pendingStatuses.indexOf(status) !== -1; });
     var pendingCount = pendingLeads.length;
 
     document.getElementById('kpiGrid').innerHTML =
@@ -1897,7 +1898,9 @@
 
   window.__getPendingLeads = function(allLeads) {
     if (!allLeads) return [];
-    return allLeads.filter(function(lead) { var nextDate = lead.nextFollowUpDate || ''; return nextDate > '2026-08-31'; });
+    var today = (window.__dashboardData && window.__dashboardData.todayDate) || '';
+    var pendingStatuses = ['New', 'Not Responding', 'WhatsApps', 'Share Quotation', 'Hot Lead', 'Potential Lead'];
+    return allLeads.filter(function(lead) { var nextDate = String(lead.nextFollowUpDate || '').slice(0, 10); var status = lead.leadStatus || 'New'; return !!nextDate && nextDate > today && pendingStatuses.indexOf(status) !== -1; });
   };
   window.__handleHotLeadsClick = function() {
     var allLeads = window.__dashboardData ? window.__dashboardData.allLeads : [];
