@@ -647,6 +647,8 @@
     .rd-ring-label { font-size: 11px; font-weight: 600; opacity: .9; margin-top: 4px; }
     .rd-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 14px; }
     .rd-kpi { display: flex; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 14px 16px; box-shadow: var(--shadow); border-left: 4px solid var(--accent); transition: transform .18s, box-shadow .18s; }
+    .rd-kpi-clickable { cursor: pointer; }
+    .rd-kpi-clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
     .rd-kpi:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
     .rd-kpi-ico { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); flex-shrink: 0; }
     .rd-kpi-ico svg { width: 20px; height: 20px; }
@@ -4198,8 +4200,9 @@
       '<circle cx="40" cy="40" r="' + r + '" fill="none" stroke="' + color + '" stroke-width="8" stroke-linecap="round" stroke-dasharray="' + c.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" transform="rotate(-90 40 40)"/></svg>' +
       '<div class="rd-ring-val">' + pct + '%</div><div class="rd-ring-label">' + escapeHtml(label) + '</div></div>';
   }
-  function rdKpi(label, value, color, icon, sub) {
-    return '<div class="rd-kpi" style="--accent:' + color + ';"><div class="rd-kpi-ico">' + icon + '</div><div><div class="rd-kpi-label">' + label + '</div><div class="rd-kpi-val">' + value + '</div>' + (sub ? '<div class="rd-kpi-sub">' + sub + '</div>' : '') + '</div></div>';
+  function rdKpi(label, value, color, icon, sub, clickAction) {
+    var cls = clickAction ? 'rd-kpi rd-kpi-clickable' : 'rd-kpi';
+    return '<div class="' + cls + '" style="--accent:' + color + ';"' + (clickAction ? ' onclick="' + clickAction + '" role="button" tabindex="0"' : '') + '><div class="rd-kpi-ico">' + icon + '</div><div><div class="rd-kpi-label">' + label + '</div><div class="rd-kpi-val">' + value + '</div>' + (sub ? '<div class="rd-kpi-sub">' + sub + '</div>' : '') + '</div></div>';
   }
   function rdSeg(parts) {
     var tot = parts.reduce(function (a, p) { return a + (p.v || 0); }, 0) || 1;
@@ -4246,7 +4249,8 @@
       rdKpi('Total Leads', ov.totalLeads || 0, priC, RD_ICO.users) +
       rdKpi('Converted', ov.convertedLeads || 0, okC, RD_ICO.check) +
       rdKpi('Fulfilled', ov.fulfilledLeads || 0, '#0d9488', RD_ICO.star) +
-      rdKpi('Pending', ov.pendingLeads || 0, warnC, RD_ICO.clock) +
+      rdKpi('Pending', ov.pendingLeads || 0, warnC, RD_ICO.clock, '', "window.__rdOpenReportLeads('pending')") +
+      rdKpi('Warm Lead', ov.warmLeads || 0, '#d97706', RD_ICO.star, '', "window.__rdOpenReportLeads('warm')") +
       rdKpi('Overdue', ov.overdue || 0, dangC, RD_ICO.alert, 'follow-ups missed') +
       rdKpi('Due Today', ov.dueToday || 0, '#2563eb', RD_ICO.cal) + '</div>';
     var board = rows.length ? '<div class="panel rd-board"><div class="panel-header">' + ICONS.bars + '<h3>Doer Leaderboard</h3></div>' +
@@ -4328,7 +4332,8 @@
         '<div class="rd-hero-rings">' + rdRing(m.conversionRate, '#ffffff', 'Conversion') + rdRing(m.fulfillmentRate, '#a7f3d0', 'Fulfilment') + '</div></div>';
     var kpis = '<div class="rd-kpis">' +
       rdKpi('Assigned', m.totalLeads || 0, priC, RD_ICO.users) +
-      rdKpi('Pending', m.pendingLeads || 0, warnC, RD_ICO.clock) +
+      rdKpi('Pending', m.pendingLeads || 0, warnC, RD_ICO.clock, '', "window.__rdOpenReportLeads('pending')") +
+      rdKpi('Warm Lead', m.warmLeads || 0, '#d97706', RD_ICO.star, '', "window.__rdOpenReportLeads('warm')") +
       rdKpi('Converted', m.convertedLeads || 0, okC, RD_ICO.check) +
       rdKpi('Fulfilled', m.fulfilledLeads || 0, '#0d9488', RD_ICO.star) +
       rdKpi('Failed', m.failedLeads || 0, dangC, RD_ICO.x) +
@@ -4362,6 +4367,33 @@
       });
     }, 'rdTrend');
   }
+  window.__rdOpenReportLeads = function (kind) {
+    var payload = _reportDoerFiltersPayload_();
+    if (kind === 'pending') payload.pendingOnly = true;
+    else if (kind === 'warm') payload.statusOnly = 'Warm Lead';
+    google.script.run
+      .withSuccessHandler(function (res) {
+        if (!res || res.success === false) {
+          if (res && res.code === 'SESSION_EXPIRED') return handleSessionExpired();
+          toast((res && res.message) || 'Could not load report leads.', 'error');
+          return;
+        }
+        var records = (res.records || []).map(function (l) {
+          return {
+            leadId: l.leadId, customerName: l.customerName, contact: l.contact,
+            leadSource: l.leadSource, assignedName: l.assignedName, date: l.date,
+            leadStatus: l.leadStatus || 'New', nextFollowUpDate: l.nextFollowUpDate || '',
+            lastFollowUpDecision: l.lastRemark || '', _rowKey: l._rowKey || l.leadId
+          };
+        });
+        if (records.length) showFilteredLeadsModal(kind === 'pending' ? 'Pending Leads (' + records.length + ')' : 'Warm Leads (' + records.length + ')',
+          kind === 'pending' ? 'Pending leads for the selected Doer report filters' : 'Warm Lead status for the selected Doer report filters',
+          records, kind === 'pending' ? 'pendingLeads' : 'leadStatus', kind === 'warm' ? 'Warm Lead' : null);
+        else toast('No matching leads found.', 'error');
+      })
+      .withFailureHandler(function (err) { toast((err && err.message) || 'Could not load report leads.', 'error'); })
+      .getDoerReportDetails(STATE.token, payload);
+  };
   window.__reportDoerOpenIndividual = function (doerName) {
     STATE.reportDoerState.activeTab = 'individual';
     STATE.reportDoerState.doerName = doerName || '';
