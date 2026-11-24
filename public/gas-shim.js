@@ -6,17 +6,20 @@
  */
 (function () {
   function post(fn, args) {
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timeout = setTimeout(function () { if (controller) controller.abort(); }, 15000);
     return fetch('/api/rpc', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fn: fn, args: args }),
       credentials: 'same-origin',
+      signal: controller ? controller.signal : undefined,
     }).then(function (res) {
       if (res.status === 401 || res.status === 403) {
         return { success: false, code: 'SESSION_EXPIRED', message: 'Session expired. Please log in again.' };
       }
       return res.json();
-    });
+    }).finally(function () { clearTimeout(timeout); });
   }
 
   /** One chainable runner: .withSuccessHandler(cb).withFailureHandler(cb).anyFn(args) */
