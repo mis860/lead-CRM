@@ -8,8 +8,6 @@
   <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Panache CRM">
   <link rel="manifest" href="/crm/manifest.webmanifest"><link rel="apple-touch-icon" href="/crm/icons/apple-touch-icon.png"><link rel="icon" href="/crm/icons/icon-192.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script>try{var _a=JSON.parse(localStorage.getItem('crmAppearance')||'{}');var _h=document.documentElement;if(_a.theme)_h.setAttribute('data-theme',_a.theme);if(_a.density)_h.setAttribute('data-density',_a.density);if(_a.listview)_h.setAttribute('data-listview',_a.listview);}catch(e){}</script>
   <meta charset ="utf-8">
   <script async src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" onerror="this.onerror=null;var s=document.createElement('script');s.async=true;s.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js';document.head.appendChild(s);"></script>
@@ -1889,7 +1887,7 @@
       '</div>' +
       '<div class="kpi-card clickable" onclick="window.__handleKpiClick(\'Not Responding\', \'Leads with status Not Responding\', window.__getLeadsByStatus(\'Not Responding\'), \'leadStatus\', \'Not Responding\')">' +
         '<div class="kpi-card-top"><div class="label">Not Responding</div><div class="kpi-icon red">' + ICONS.alert + '</div></div>' +
-        '<div class="value">' + ((fullData.allLeads || []).filter(function(l) { return (l.leadStatus || \'New\') === \'Not Responding\'; }).length) + '</div>' +
+        '<div class="value">' + ((fullData.allLeads || []).filter(function(l) { return l.leadStatus === "Not Responding"; }).length) + '</div>' +
         '<div class="kpi-click-hint">↕ Click to view leads</div>' +
       '</div>' +
       '<div class="kpi-card clickable" onclick="window.__handleKpiClick(\'Warm Leads\', \'Leads with status Warm Lead\', window.__getLeadsByStatus(\'Warm Lead\'), \'leadStatus\', \'Warm Lead\')">' +
