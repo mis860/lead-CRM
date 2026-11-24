@@ -1170,7 +1170,10 @@
     );
   }
 
+  var crmBootWatchdog = null;
   document.addEventListener('DOMContentLoaded', function () {
+    // Never leave users on the full-screen loader if session validation/API stalls.
+    crmBootWatchdog = setTimeout(function () { showLogin(); }, 12000);
     loadLogo();
     bindLoginForm();
     bindShellEvents();
@@ -1254,6 +1257,7 @@
   }
 
   function showLogin() {
+    if (crmBootWatchdog) { clearTimeout(crmBootWatchdog); crmBootWatchdog = null; }
     document.getElementById('globalLoader').style.display = 'none';
     document.getElementById('loginScreen').style.display = 'flex';
     document.getElementById('appShell').style.display = 'none';
@@ -1263,6 +1267,7 @@
   }
 
   function enterApp() {
+    if (crmBootWatchdog) { clearTimeout(crmBootWatchdog); crmBootWatchdog = null; }
     document.getElementById('globalLoader').style.display = 'none';
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('appShell').style.display = 'flex';
